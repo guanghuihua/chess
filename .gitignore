@@ -80,3 +80,20 @@ CMakeLists.txt.user*
 .rcc/
 .uic/
 /build*/
+
+# Downloaded Pikafish binaries and temporary release packages
+/engines/pikafish/pikafish.exe
+/engines/pikafish/pikafish.nnue
+/third_party/pikafish/
+
+# Local compiler diagnostics and scratch files
+/_test.cpp
+/_test.err
+/_test.pp
+/gpp_err.txt
+/pp.txt
+
+# Local API credentials
+.env
+.env.*
+!.env.example
