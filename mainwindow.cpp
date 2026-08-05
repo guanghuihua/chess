@@ -3,6 +3,7 @@
 #include "./ui_mainwindow.h"
 #include "xiangqi_board_widget.h"
 #include "training_dialog.h"
+#include "profile_dashboard_widget.h"
 
 #include <QFont>
 #include <QComboBox>
@@ -15,6 +16,7 @@
 #include <QMessageBox>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSplitter>
 #include <QTabWidget>
@@ -131,15 +133,27 @@ MainWindow::MainWindow(QWidget *parent)
 
     auto *statsTab = new QWidget(tabs);
     auto *statsLayout = new QVBoxLayout(statsTab);
-    statsLayout->setContentsMargins(0, 10, 0, 0);
-    stats_browser_ = new QTextBrowser(statsTab);
-    statsLayout->addWidget(stats_browser_);
+    statsLayout->setContentsMargins(0, 6, 0, 0);
+    auto *statsScroll = new QScrollArea(statsTab);
+    statsScroll->setWidgetResizable(true);
+    statsScroll->setFrameShape(QFrame::NoFrame);
+    auto *statsContent = new QWidget(statsScroll);
+    auto *statsContentLayout = new QVBoxLayout(statsContent);
+    statsContentLayout->setContentsMargins(2, 2, 2, 2);
+    statsContentLayout->setSpacing(10);
+    profile_dashboard_ = new ProfileDashboardWidget(statsContent);
+    statsContentLayout->addWidget(profile_dashboard_);
+    stats_browser_ = new QTextBrowser(statsContent);
+    stats_browser_->setMinimumHeight(220);
+    statsContentLayout->addWidget(stats_browser_);
 
-    database_label_ = new QLabel(statsTab);
+    database_label_ = new QLabel(statsContent);
     database_label_->setWordWrap(true);
     database_label_->setObjectName("databasePath");
     database_label_->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    statsLayout->addWidget(database_label_);
+    statsContentLayout->addWidget(database_label_);
+    statsScroll->setWidget(statsContent);
+    statsLayout->addWidget(statsScroll);
     tabs->addTab(statsTab, QString::fromUtf8(u8"个人统计"));
     panelLayout->addWidget(tabs, 1);
 
@@ -619,35 +633,19 @@ void MainWindow::refreshStats()
         latestReport.replace("\n", "<br>");
     }
     const QString userName = user_combo_ ? user_combo_->currentText() : QString();
+    profile_dashboard_->setProfileData(
+        userName, profile, stats, training,
+        database_.recentGamePerformance(active_user_id_, 10));
     stats_browser_->setHtml(QString::fromUtf8(
-        u8"<h3>%13 的个人画像</h3>"
-        u8"有效对局：%1　胜/负/和：%14/%15/%16<br>"
-        u8"已分析红方走法：%2　AI讲解：%3<br>"
-        u8"优秀：%4　轻微失误：%5<br>"
-        u8"明显失误：%6　严重失误：%7<br>"
-        u8"平均局面损失：%8　平均思考：%17 秒<hr>"
-        u8"<b>当前训练重点</b><br>%18<hr>"
-        u8"个人错题：%9　今日到期：%10<br>"
-        u8"累计训练：%11　答对：%12<hr>"
-        u8"<b>最近阶段总结</b><br>%19")
-        .arg(stats.games)
-        .arg(stats.analyzedMoves)
-        .arg(stats.coachedMoves)
-        .arg(stats.excellentMoves)
-        .arg(stats.inaccuracies)
-        .arg(stats.mistakes)
-        .arg(stats.blunders)
-        .arg(stats.averageLoss, 0, 'f', 1)
+        u8"<h3>%1 的训练说明</h3>"
+        u8"<b>当前训练重点</b><br>%2<br><br>"
+        u8"个人错题：%3　今日到期：%4　AI讲解：%5<hr>"
+        u8"<b>最近阶段总结</b><br>%6")
+        .arg(userName.toHtmlEscaped(),
+             profile.mainWeakness.toHtmlEscaped())
         .arg(training.positions)
         .arg(training.due)
-        .arg(training.attempts)
-        .arg(training.correctAttempts)
-        .arg(userName.toHtmlEscaped())
-        .arg(profile.wins)
-        .arg(profile.losses)
-        .arg(profile.draws)
-        .arg(profile.averageThinkingTimeMs / 1000.0, 0, 'f', 1)
-        .arg(profile.mainWeakness.toHtmlEscaped())
+        .arg(stats.coachedMoves)
         .arg(latestReport));
 }
 

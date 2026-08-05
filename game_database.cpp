@@ -595,7 +595,7 @@ GameDatabase::TrainingStats GameDatabase::trainingStats(qint64 userId) const
 
     QSqlQuery query(database_);
     query.prepare(
-        "SELECT COUNT(*), COALESCE(AVG(a.score_loss), 0), "
+        "SELECT COUNT(*), COALESCE(AVG(MIN(a.score_loss, 300)), 0), "
         "SUM(CASE WHEN a.category = 'excellent' THEN 1 ELSE 0 END), "
         "SUM(CASE WHEN a.category = 'inaccuracy' THEN 1 ELSE 0 END), "
         "SUM(CASE WHEN a.category = 'mistake' THEN 1 ELSE 0 END), "
@@ -642,7 +642,7 @@ GameDatabase::UserProfile GameDatabase::userProfile(qint64 userId) const
 
     QSqlQuery analysis(database_);
     analysis.prepare(
-        "SELECT COUNT(*), COALESCE(AVG(a.score_loss),0), "
+        "SELECT COUNT(*), COALESCE(AVG(MIN(a.score_loss,300)),0), "
         "COALESCE(SUM(CASE WHEN a.category='blunder' THEN 1 ELSE 0 END),0), "
         "COALESCE(AVG(m.thinking_time_ms),0), "
         "COALESCE(SUM(CASE WHEN a.category='mistake' THEN 1 ELSE 0 END),0), "
@@ -728,7 +728,7 @@ GameDatabase::ProfileReport GameDatabase::generateMilestoneReport(
 
     QSqlQuery analysis(database_);
     analysis.prepare(
-        "SELECT COUNT(*), COALESCE(AVG(a.score_loss),0), "
+        "SELECT COUNT(*), COALESCE(AVG(MIN(a.score_loss,300)),0), "
         "COALESCE(SUM(a.category='blunder'),0), "
         "COALESCE(SUM(a.category='mistake'),0), "
         "COALESCE(AVG(m.thinking_time_ms),0) "
@@ -806,6 +806,31 @@ QVector<GameDatabase::ProfileReport> GameDatabase::profileReports(qint64 userId)
         reports.push_back(report);
     }
     return reports;
+}
+
+QVector<GameDatabase::GamePerformance> GameDatabase::recentGamePerformance(
+    qint64 userId, int limit) const
+{
+    QVector<GamePerformance> performance;
+    QSqlQuery query(database_);
+    query.prepare(
+        "SELECT g.id, g.result, COALESCE(AVG(MIN(a.score_loss,300)),0), "
+        "COALESCE(SUM(CASE WHEN a.category='blunder' THEN 1 ELSE 0 END),0) "
+        "FROM games g LEFT JOIN analyses a ON a.game_id=g.id "
+        "WHERE g.user_id=? AND g.result NOT IN ('ongoing','abandoned') "
+        "GROUP BY g.id ORDER BY g.id DESC LIMIT ?");
+    query.addBindValue(userId);
+    query.addBindValue(std::max(1, limit));
+    if (!query.exec()) {
+        return performance;
+    }
+    while (query.next()) {
+        performance.push_back(GamePerformance{
+            query.value(0).toLongLong(), query.value(1).toString(),
+            query.value(2).toDouble(), query.value(3).toInt()});
+    }
+    std::reverse(performance.begin(), performance.end());
+    return performance;
 }
 
 QString GameDatabase::databasePath() const

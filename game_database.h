@@ -79,6 +79,14 @@ public:
         QString generatedAt;
     };
 
+    struct GamePerformance
+    {
+        qint64 gameId = -1;
+        QString result;
+        double averageLoss = 0.0;
+        int blunders = 0;
+    };
+
     GameDatabase();
     ~GameDatabase();
 
@@ -117,6 +125,8 @@ public:
     ProfileReport generateMilestoneReport(qint64 userId, bool *created = nullptr,
                                           QString *errorMessage = nullptr);
     QVector<ProfileReport> profileReports(qint64 userId) const;
+    QVector<GamePerformance> recentGamePerformance(qint64 userId,
+                                                   int limit = 10) const;
     QString databasePath() const;
 
 private:

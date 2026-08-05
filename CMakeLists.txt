@@ -33,6 +33,8 @@ set(PROJECT_SOURCES
         credential_store.h
         training_dialog.cpp
         training_dialog.h
+        profile_dashboard_widget.cpp
+        profile_dashboard_widget.h
 )
 
 if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)

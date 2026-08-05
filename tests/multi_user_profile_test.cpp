@@ -75,6 +75,10 @@ int main(int argc, char *argv[])
         bobProfile.losses != 3) {
         return 6;
     }
+    if (database.recentGamePerformance(alice, 10).size() != 10 ||
+        database.recentGamePerformance(bob, 10).size() != 3) {
+        return 6;
+    }
 
     bool created = false;
     const auto report = database.generateMilestoneReport(alice, &created, &error);

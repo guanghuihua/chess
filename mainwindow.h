@@ -18,6 +18,7 @@ class QLabel;
 class QComboBox;
 class QTextBrowser;
 class XiangqiBoardWidget;
+class ProfileDashboardWidget;
 
 class MainWindow : public QMainWindow
 {
@@ -36,6 +37,7 @@ private:
     QTextBrowser *analysis_browser_ = nullptr;
     QTextBrowser *stats_browser_ = nullptr;
     QComboBox *user_combo_ = nullptr;
+    ProfileDashboardWidget *profile_dashboard_ = nullptr;
     GameDatabase database_;
     PikafishAnalyzer *analyzer_ = nullptr;
     DeepSeekCoach *coach_ = nullptr;
