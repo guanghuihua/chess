@@ -1,5 +1,6 @@
 #include <QCoreApplication>
 #include <QDebug>
+#include <QRegularExpression>
 #include <QStandardPaths>
 #include <QTimer>
 
@@ -31,7 +32,7 @@ int main(int argc, char *argv[])
         qCritical() << "Database open failed:" << error;
         return 3;
     }
-    const qint64 gameId = database.startGame(&error);
+    const qint64 gameId = database.startGame(1, &error);
     if (gameId < 0 || !database.recordMove(gameId, move, &error)) {
         qCritical() << "Database move write failed:" << error;
         return 4;
@@ -45,6 +46,13 @@ int main(int argc, char *argv[])
         if (result.bestMove.isEmpty() || result.actualMove != "a3a4") {
             qCritical() << "Unexpected analysis result" << result.actualMove << result.bestMove;
             application.exit(5);
+            return;
+        }
+        if (result.principalVariation.contains(
+                QRegularExpression("[a-i][0-9][a-i][0-9]"))) {
+            qCritical() << "Principal variation was not translated"
+                        << result.principalVariation;
+            application.exit(6);
             return;
         }
         if (!database.recordAnalysis(
@@ -64,14 +72,46 @@ int main(int argc, char *argv[])
             application.exit(7);
             return;
         }
-        const auto stats = database.trainingStats();
+        const QString trainingBest = result.bestMove == result.actualMove
+                                         ? QStringLiteral("b2b3")
+                                         : result.bestMove;
+        if (!database.recordAnalysis(
+                result.gameId, result.ply, result.actualMove, trainingBest,
+                120, 0, 120, "mistake", trainingBest, &error)) {
+            qCritical() << "Training analysis setup failed:" << error;
+            application.exit(8);
+            return;
+        }
+        if (database.generateTrainingPositions(1, &error) < 0) {
+            qCritical() << "Training position generation failed:" << error;
+            application.exit(9);
+            return;
+        }
+        const auto positions = database.dueTrainingPositions(1, 5);
+        if (positions.isEmpty() ||
+            !database.recordTrainingAttempt(positions.front().id,
+                                            positions.front().bestMove,
+                                            true, 2500, &error)) {
+            qCritical() << "Training attempt failed:" << error;
+            application.exit(10);
+            return;
+        }
+        const auto trainingSummary = database.trainingSummary(1);
+        if (trainingSummary.positions < 1 || trainingSummary.attempts < 1 ||
+            trainingSummary.correctAttempts < 1) {
+            qCritical() << "Training summary was not updated";
+            application.exit(11);
+            return;
+        }
+        const auto stats = database.trainingStats(1);
         if (stats.analyzedMoves < 1 || stats.coachedMoves < 1) {
             qCritical() << "Training statistics were not updated";
             application.exit(8);
             return;
         }
         qInfo() << "PASS" << result.actualMove << result.bestMove
-                << result.scoreLoss << result.category;
+                << result.scoreLoss << result.category
+                << result.principalVariation;
         application.exit(0);
     });
 

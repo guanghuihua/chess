@@ -80,6 +80,7 @@ CMakeLists.txt.user*
 .rcc/
 .uic/
 /build*/
+/dist/
 
 # Downloaded Pikafish binaries and temporary release packages
 /engines/pikafish/pikafish.exe

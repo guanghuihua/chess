@@ -197,7 +197,8 @@ void PikafishAnalyzer::finishCurrentAnalysis()
     result.actualScore = -latest_score_;
     result.scoreLoss = calculateScoreLoss(result);
     result.category = categoryForLoss(result.scoreLoss);
-    result.principalVariation = best_pv_;
+    result.principalVariation = toChinesePrincipalVariation(
+        current_.move.boardBefore, current_.move.side, best_pv_);
     result.explanation = explanationFor(result);
     result.boardBefore = QString::fromStdString(current_.move.boardBefore);
     result.thinkingTimeMs = current_.move.thinkingTimeMs;
@@ -225,10 +226,12 @@ QString PikafishAnalyzer::findEngineExecutable()
     }
 
     const QString root = findProjectRoot();
+    const QString applicationDirectory = QCoreApplication::applicationDirPath();
     const QStringList candidates = {
         QDir(root).filePath("engines/pikafish/pikafish.exe"),
         QDir(root).filePath("third_party/pikafish/pikafish.exe"),
-        QDir(QCoreApplication::applicationDirPath()).filePath("engines/pikafish.exe")
+        QDir(applicationDirectory).filePath("engines/pikafish/pikafish.exe"),
+        QDir(applicationDirectory).filePath("engines/pikafish.exe")
     };
     for (const QString &candidate : candidates) {
         if (QFileInfo::exists(candidate)) {
@@ -378,6 +381,39 @@ QString PikafishAnalyzer::toChineseNotation(const std::string &board,
         }
     }
     return piece + numberText(fileNumber(fromCol)) + action + destination;
+}
+
+QString PikafishAnalyzer::toChinesePrincipalVariation(const std::string &board,
+                                                       XiangqiGame::Side side,
+                                                       const QString &uciMoves)
+{
+    XiangqiGame position;
+    if (!position.loadPosition(board, side)) {
+        return uciMoves;
+    }
+
+    QStringList notation;
+    const QStringList moves = uciMoves.split(' ', Qt::SkipEmptyParts);
+    for (const QString &move : moves) {
+        if (move.size() < 4) {
+            continue;
+        }
+        const XiangqiGame::Side movingSide = position.sideToMove();
+        notation.push_back(toChineseNotation(position.boardString(), movingSide, move));
+
+        const int fromCol = move[0].unicode() - QChar('a').unicode();
+        const int fromRow = QChar('9').unicode() - move[1].unicode();
+        const int toCol = move[2].unicode() - QChar('a').unicode();
+        const int toRow = QChar('9').unicode() - move[3].unicode();
+        if (!XiangqiGame::inBounds(fromRow, fromCol) ||
+            !XiangqiGame::inBounds(toRow, toCol) ||
+            !position.move(fromRow, fromCol, toRow, toCol)) {
+            notation.back() += QString::fromUtf8(u8"（") + move + QString::fromUtf8(u8"）");
+            break;
+        }
+    }
+    return notation.isEmpty() ? uciMoves
+                              : notation.join(QString::fromUtf8(u8" → "));
 }
 
 QString PikafishAnalyzer::categoryForLoss(int loss)

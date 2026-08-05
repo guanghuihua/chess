@@ -88,6 +88,67 @@ bool XiangqiGame::move(int fromRow, int fromCol, int toRow, int toCol,
     return true;
 }
 
+bool XiangqiGame::undoLastMove()
+{
+    if (move_history_.empty()) {
+        return false;
+    }
+
+    const MoveRecord &record = move_history_.back();
+    board_[record.fromRow][record.fromCol] = record.movedPiece;
+    board_[record.toRow][record.toCol] = record.capturedPiece;
+    side_to_move_ = record.side;
+    result_ = GameResult::Ongoing;
+    move_history_.pop_back();
+    return true;
+}
+
+bool XiangqiGame::loadPosition(const std::string &board, Side sideToMove)
+{
+    Board loaded{};
+    int row = 0;
+    int col = 0;
+    for (char raw : board) {
+        if (raw == '/') {
+            if (col != 9 || row >= 9) {
+                return false;
+            }
+            ++row;
+            col = 0;
+            continue;
+        }
+        if (row >= 10 || col >= 9) {
+            return false;
+        }
+        if (raw != '.') {
+            const bool red = std::isupper(static_cast<unsigned char>(raw)) != 0;
+            PieceType type;
+            switch (static_cast<char>(std::toupper(static_cast<unsigned char>(raw)))) {
+            case 'K': type = PieceType::General; break;
+            case 'A': type = PieceType::Advisor; break;
+            case 'E': type = PieceType::Elephant; break;
+            case 'H': type = PieceType::Horse; break;
+            case 'R': type = PieceType::Rook; break;
+            case 'C': type = PieceType::Cannon; break;
+            case 'S': type = PieceType::Soldier; break;
+            default: return false;
+            }
+            loaded[row][col] = Piece{type, red ? Side::Red : Side::Black};
+        }
+        ++col;
+    }
+    if (row != 9 || col != 9) {
+        return false;
+    }
+
+    board_ = loaded;
+    side_to_move_ = sideToMove;
+    result_ = GameResult::Ongoing;
+    move_history_.clear();
+    return isGeneralPresent(Side::Red, board_) &&
+           isGeneralPresent(Side::Black, board_);
+}
+
 bool XiangqiGame::isLegalMove(int fromRow, int fromCol, int toRow, int toCol) const
 {
     return isLegalMoveOnBoard(fromRow, fromCol, toRow, toCol, side_to_move_, board_);

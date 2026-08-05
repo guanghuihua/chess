@@ -258,6 +258,7 @@ bool DeepSeekCoach::parseCoachingContent(const QByteArray &body,
 
     result->gameId = request.analysis.gameId;
     result->ply = request.analysis.ply;
+    result->actualMove = request.analysis.actualMove;
     result->model = QString::fromLatin1(modelName);
     result->diagnosis = diagnosis;
     result->evidence = evidence;

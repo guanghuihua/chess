@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.16)
 
 project(chess VERSION 0.1 LANGUAGES CXX)
 
+enable_testing()
+
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
@@ -29,6 +31,8 @@ set(PROJECT_SOURCES
         deepseek_coach.h
         credential_store.cpp
         credential_store.h
+        training_dialog.cpp
+        training_dialog.h
 )
 
 if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
@@ -102,3 +106,44 @@ target_link_libraries(training_smoke_test PRIVATE
     Qt${QT_VERSION_MAJOR}::Sql
 )
 target_include_directories(training_smoke_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME training_smoke_test COMMAND training_smoke_test)
+
+add_executable(xiangqi_undo_test
+    tests/xiangqi_undo_test.cpp
+    xiangqi_game.cpp
+    xiangqi_game.h
+)
+target_include_directories(xiangqi_undo_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME xiangqi_undo_test COMMAND xiangqi_undo_test)
+
+add_executable(training_ui_smoke_test
+    tests/training_ui_smoke_test.cpp
+    training_dialog.cpp
+    training_dialog.h
+    xiangqi_board_widget.cpp
+    xiangqi_board_widget.h
+    xiangqi_game.cpp
+    xiangqi_game.h
+    game_database.cpp
+    game_database.h
+)
+target_link_libraries(training_ui_smoke_test PRIVATE
+    Qt${QT_VERSION_MAJOR}::Widgets
+    Qt${QT_VERSION_MAJOR}::Sql
+)
+target_include_directories(training_ui_smoke_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME training_ui_smoke_test COMMAND training_ui_smoke_test)
+
+add_executable(multi_user_profile_test
+    tests/multi_user_profile_test.cpp
+    game_database.cpp
+    game_database.h
+    xiangqi_game.cpp
+    xiangqi_game.h
+)
+target_link_libraries(multi_user_profile_test PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Sql
+)
+target_include_directories(multi_user_profile_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME multi_user_profile_test COMMAND multi_user_profile_test)

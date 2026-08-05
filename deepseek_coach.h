@@ -18,6 +18,7 @@ public:
     {
         qint64 gameId = -1;
         int ply = 0;
+        QString actualMove;
         QString model;
         QString diagnosis;
         QString evidence;

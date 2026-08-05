@@ -41,6 +41,8 @@ public:
     const std::optional<Piece> &at(int row, int col) const;
     bool move(int fromRow, int fromCol, int toRow, int toCol,
               std::int64_t thinkingTimeMs = 0);
+    bool undoLastMove();
+    bool loadPosition(const std::string &board, Side sideToMove);
     bool isLegalMove(int fromRow, int fromCol, int toRow, int toCol) const;
     Side sideToMove() const;
     GameResult result() const;

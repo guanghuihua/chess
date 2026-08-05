@@ -2,15 +2,22 @@
 
 #include "./ui_mainwindow.h"
 #include "xiangqi_board_widget.h"
+#include "training_dialog.h"
 
 #include <QFont>
+#include <QComboBox>
 #include <QDialog>
+#include <QFrame>
 #include <QFormLayout>
 #include <QHBoxLayout>
+#include <QInputDialog>
 #include <QLabel>
 #include <QMessageBox>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QSignalBlocker>
+#include <QSplitter>
+#include <QTabWidget>
 #include <QTextBrowser>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -22,58 +29,165 @@ MainWindow::MainWindow(QWidget *parent)
     ui->setupUi(this);
 
     auto *central = new QWidget(this);
-    auto *mainLayout = new QHBoxLayout(central);
-    mainLayout->setContentsMargins(12, 12, 12, 12);
-    mainLayout->setSpacing(16);
+    central->setObjectName("appRoot");
+    auto *rootLayout = new QVBoxLayout(central);
+    rootLayout->setContentsMargins(16, 14, 16, 16);
+    rootLayout->setSpacing(14);
 
-    board_widget_ = new XiangqiBoardWidget(central);
-    mainLayout->addWidget(board_widget_, 3);
+    auto *header = new QFrame(central);
+    header->setObjectName("headerCard");
+    auto *headerLayout = new QHBoxLayout(header);
+    headerLayout->setContentsMargins(20, 12, 16, 12);
+    headerLayout->setSpacing(10);
 
-    auto *panel = new QWidget(central);
-    panel->setMinimumWidth(360);
-    panel->setMaximumWidth(460);
-    auto *panelLayout = new QVBoxLayout(panel);
-
-    auto *title = new QLabel(QString::fromUtf8(u8"中国象棋针对性训练系统"), panel);
+    auto *brandLayout = new QVBoxLayout;
+    brandLayout->setSpacing(1);
+    auto *title = new QLabel(QString::fromUtf8(u8"中国象棋针对性训练系统"), header);
     QFont titleFont = title->font();
-    titleFont.setPointSize(16);
+    titleFont.setPointSize(18);
     titleFont.setBold(true);
     title->setFont(titleFont);
-    panelLayout->addWidget(title);
+    auto *subtitle = new QLabel(QString::fromUtf8(u8"对局 · 复盘 · 个性化训练"), header);
+    subtitle->setObjectName("subtitle");
+    brandLayout->addWidget(title);
+    brandLayout->addWidget(subtitle);
+    headerLayout->addLayout(brandLayout);
+    headerLayout->addStretch();
+
+    headerLayout->addWidget(new QLabel(QString::fromUtf8(u8"用户"), header));
+    user_combo_ = new QComboBox(header);
+    user_combo_->setMinimumWidth(110);
+    headerLayout->addWidget(user_combo_);
+    auto *createUserButton = new QPushButton(QString::fromUtf8(u8"＋"), header);
+    createUserButton->setToolTip(QString::fromUtf8(u8"新建用户"));
+    createUserButton->setFixedWidth(38);
+    headerLayout->addWidget(createUserButton);
+
+    headerLayout->addWidget(new QLabel(QString::fromUtf8(u8"对弈难度"), header));
+    auto *difficultyCombo = new QComboBox(header);
+    difficultyCombo->addItem(QString::fromUtf8(u8"\u5165\u95e8"));
+    difficultyCombo->addItem(QString::fromUtf8(u8"\u521d\u7ea7"));
+    difficultyCombo->addItem(QString::fromUtf8(u8"\u4e2d\u7ea7"));
+    difficultyCombo->addItem(QString::fromUtf8(u8"\u9ad8\u7ea7"));
+    difficultyCombo->setCurrentIndex(1);
+    difficultyCombo->setMinimumWidth(100);
+    headerLayout->addWidget(difficultyCombo);
+
+    auto *undoButton = new QPushButton(QString::fromUtf8(u8"悔棋"), header);
+    undoButton->setProperty("secondary", true);
+    auto *trainingButton = new QPushButton(QString::fromUtf8(u8"专项训练"), header);
+    trainingButton->setProperty("secondary", true);
+    auto *deepSeekButton = new QPushButton(QString::fromUtf8(u8"AI 设置"), header);
+    deepSeekButton->setProperty("secondary", true);
+    auto *newGameButton = new QPushButton(QString::fromUtf8(u8"新对局"), header);
+    newGameButton->setObjectName("primaryButton");
+    headerLayout->addWidget(undoButton);
+    headerLayout->addWidget(trainingButton);
+    headerLayout->addWidget(deepSeekButton);
+    headerLayout->addWidget(newGameButton);
+    rootLayout->addWidget(header);
+
+    auto *splitter = new QSplitter(Qt::Horizontal, central);
+    splitter->setChildrenCollapsible(false);
+    splitter->setHandleWidth(8);
+
+    auto *boardCard = new QFrame(splitter);
+    boardCard->setObjectName("contentCard");
+    auto *boardLayout = new QVBoxLayout(boardCard);
+    boardLayout->setContentsMargins(12, 12, 12, 12);
+    board_widget_ = new XiangqiBoardWidget(boardCard);
+    boardLayout->addWidget(board_widget_);
+
+    auto *panel = new QFrame(splitter);
+    panel->setObjectName("contentCard");
+    panel->setMinimumWidth(350);
+    auto *panelLayout = new QVBoxLayout(panel);
+    panelLayout->setContentsMargins(16, 14, 16, 14);
+    panelLayout->setSpacing(10);
+
+    auto *statusTitle = new QLabel(QString::fromUtf8(u8"系统状态"), panel);
+    statusTitle->setObjectName("sectionTitle");
+    panelLayout->addWidget(statusTitle);
 
     engine_status_label_ = new QLabel(QString::fromUtf8(u8"正在启动皮卡鱼……"), panel);
     engine_status_label_->setWordWrap(true);
+    engine_status_label_->setObjectName("statusPill");
     panelLayout->addWidget(engine_status_label_);
 
     coach_status_label_ = new QLabel(QString::fromUtf8(u8"正在检查 DeepSeek 配置……"), panel);
     coach_status_label_->setWordWrap(true);
+    coach_status_label_->setObjectName("statusPill");
     panelLayout->addWidget(coach_status_label_);
 
-    panelLayout->addWidget(new QLabel(QString::fromUtf8(u8"本局实时复盘"), panel));
-    analysis_browser_ = new QTextBrowser(panel);
+    auto *tabs = new QTabWidget(panel);
+    auto *analysisTab = new QWidget(tabs);
+    auto *analysisLayout = new QVBoxLayout(analysisTab);
+    analysisLayout->setContentsMargins(0, 10, 0, 0);
+    analysis_browser_ = new QTextBrowser(analysisTab);
     analysis_browser_->setPlaceholderText(QString::fromUtf8(
         u8"你执红方。每走一步，系统会显示推荐走法、局面损失和训练建议。"));
-    panelLayout->addWidget(analysis_browser_, 3);
+    analysisLayout->addWidget(analysis_browser_);
+    tabs->addTab(analysisTab, QString::fromUtf8(u8"实时复盘"));
 
-    panelLayout->addWidget(new QLabel(QString::fromUtf8(u8"个人训练统计"), panel));
-    stats_browser_ = new QTextBrowser(panel);
-    stats_browser_->setMaximumHeight(160);
-    panelLayout->addWidget(stats_browser_);
+    auto *statsTab = new QWidget(tabs);
+    auto *statsLayout = new QVBoxLayout(statsTab);
+    statsLayout->setContentsMargins(0, 10, 0, 0);
+    stats_browser_ = new QTextBrowser(statsTab);
+    statsLayout->addWidget(stats_browser_);
 
-    database_label_ = new QLabel(panel);
+    database_label_ = new QLabel(statsTab);
     database_label_->setWordWrap(true);
-    database_label_->setStyleSheet("color: #666; font-size: 11px;");
-    panelLayout->addWidget(database_label_);
+    database_label_->setObjectName("databasePath");
+    database_label_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    statsLayout->addWidget(database_label_);
+    tabs->addTab(statsTab, QString::fromUtf8(u8"个人统计"));
+    panelLayout->addWidget(tabs, 1);
 
-    auto *newGameButton = new QPushButton(QString::fromUtf8(u8"开始新对局"), panel);
-    auto *deepSeekButton = new QPushButton(QString::fromUtf8(u8"DeepSeek 设置"), panel);
-    panelLayout->addWidget(deepSeekButton);
-    panelLayout->addWidget(newGameButton);
-
-    mainLayout->addWidget(panel, 2);
+    splitter->addWidget(boardCard);
+    splitter->addWidget(panel);
+    splitter->setStretchFactor(0, 3);
+    splitter->setStretchFactor(1, 2);
+    splitter->setSizes({760, 430});
+    rootLayout->addWidget(splitter, 1);
     setCentralWidget(central);
     setWindowTitle(QString::fromUtf8(u8"象棋个性化训练系统"));
-    resize(1180, 780);
+    setMinimumSize(1020, 700);
+    resize(1260, 800);
+
+    setStyleSheet(QString::fromUtf8(R"(
+        QMainWindow, QWidget#appRoot { background: #f4f1e9; color: #26231f; }
+        QFrame#headerCard, QFrame#contentCard {
+            background: #fffdf8;
+            border: 1px solid #ddd5c6;
+            border-radius: 10px;
+        }
+        QLabel#subtitle { color: #756d62; font-size: 12px; }
+        QLabel#sectionTitle { font-size: 15px; font-weight: 600; }
+        QLabel#statusPill {
+            background: #f3efe6; border: 1px solid #e0d8c8;
+            border-radius: 6px; padding: 7px 9px; color: #625b51;
+        }
+        QLabel#databasePath { color: #777067; font-size: 11px; padding-top: 4px; }
+        QPushButton {
+            min-height: 32px; padding: 0 14px; border-radius: 6px;
+            border: 1px solid #cfc6b7; background: #fffdf8;
+        }
+        QPushButton:hover { background: #f0eadf; border-color: #b9ad9a; }
+        QPushButton:pressed { background: #e6ded1; }
+        QPushButton#primaryButton {
+            color: white; background: #9b3f2f; border-color: #873426; font-weight: 600;
+        }
+        QPushButton#primaryButton:hover { background: #ad4937; }
+        QComboBox {
+            min-height: 32px; padding: 0 9px; border: 1px solid #cfc6b7;
+            border-radius: 6px; background: white;
+        }
+        QTabWidget::pane { border: 1px solid #ddd5c6; border-radius: 6px; background: white; }
+        QTabBar::tab { padding: 8px 16px; color: #665f55; }
+        QTabBar::tab:selected { color: #8f382b; font-weight: 600; }
+        QTextBrowser { border: none; background: white; padding: 8px; }
+        QSplitter::handle { background: transparent; }
+    )"));
 
     analyzer_ = new PikafishAnalyzer(this);
     coach_ = new DeepSeekCoach(this);
@@ -86,19 +200,36 @@ MainWindow::MainWindow(QWidget *parent)
     connect(analyzer_, &PikafishAnalyzer::statusChanged,
             this, [this](const QString &message, bool available) {
                 engine_status_label_->setText(message);
-                engine_status_label_->setStyleSheet(available ? "color: #267326;" : "color: #a33;");
+                engine_status_label_->setStyleSheet(available
+                    ? "color:#276b3b; background:#edf7ef; border:1px solid #b9ddc1; border-radius:6px; padding:7px 9px;"
+                    : "color:#9b342b; background:#fff0ed; border:1px solid #edc1ba; border-radius:6px; padding:7px 9px;");
             });
     connect(coach_, &DeepSeekCoach::coachingReady,
             this, &MainWindow::handleCoaching);
     connect(coach_, &DeepSeekCoach::statusChanged,
             this, [this](const QString &message, bool available) {
                 coach_status_label_->setText(message);
-                coach_status_label_->setStyleSheet(available ? "color: #267326;" : "color: #8a5a00;");
+                coach_status_label_->setStyleSheet(available
+                    ? "color:#276b3b; background:#edf7ef; border:1px solid #b9ddc1; border-radius:6px; padding:7px 9px;"
+                    : "color:#805b16; background:#fff8e7; border:1px solid #ead7a6; border-radius:6px; padding:7px 9px;");
             });
     connect(newGameButton, &QPushButton::clicked,
             this, &MainWindow::startNewGame);
+    connect(undoButton, &QPushButton::clicked,
+            this, &MainWindow::undoTurn);
+    connect(trainingButton, &QPushButton::clicked,
+            this, &MainWindow::startPersonalTraining);
+    connect(createUserButton, &QPushButton::clicked,
+            this, &MainWindow::createUser);
+    connect(user_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &MainWindow::switchUser);
     connect(deepSeekButton, &QPushButton::clicked,
             this, &MainWindow::configureDeepSeek);
+    connect(difficultyCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int index) {
+                board_widget_->setDifficulty(
+                    static_cast<XiangqiBoardWidget::Difficulty>(index));
+            });
 
     initializeTrainingSystem();
 }
@@ -117,11 +248,15 @@ void MainWindow::initializeTrainingSystem()
         return;
     }
     database_label_->setText(QString::fromUtf8(u8"数据保存在：") + database_.databasePath());
-    current_game_id_ = database_.startGame(&error);
+    active_user_id_ = database_.selectedUserId();
+    populateUsers();
+    current_game_id_ = database_.startGame(active_user_id_, &error);
     if (current_game_id_ < 0) {
         QMessageBox::warning(this, QString::fromUtf8(u8"无法创建对局"), error);
     }
+    database_.generateTrainingPositions(active_user_id_);
     refreshStats();
+    showMilestoneReportIfNeeded();
 }
 
 void MainWindow::handleMoveCompleted()
@@ -151,10 +286,15 @@ void MainWindow::handleGameEnded()
         QMessageBox::warning(this, QString::fromUtf8(u8"保存结果失败"), error);
     }
     refreshStats();
+    showMilestoneReportIfNeeded();
 }
 
 void MainWindow::handleAnalysis(const PikafishAnalyzer::AnalysisResult &result)
 {
+    if (!isCurrentMove(result.gameId, result.ply, result.actualMove)) {
+        return;
+    }
+
     QString error;
     if (!database_.recordAnalysis(result.gameId, result.ply, result.actualMove,
                                   result.bestMove, result.bestScore, result.actualScore,
@@ -198,12 +338,16 @@ void MainWindow::handleAnalysis(const PikafishAnalyzer::AnalysisResult &result)
     analysis_browser_->append(html);
     refreshStats();
     if (result.scoreLoss > 30) {
-        coach_->requestCoaching(result, database_.trainingStats());
+        coach_->requestCoaching(result, database_.trainingStats(active_user_id_));
     }
 }
 
 void MainWindow::handleCoaching(const DeepSeekCoach::CoachingResult &result)
 {
+    if (!isCurrentMove(result.gameId, result.ply, result.actualMove)) {
+        return;
+    }
+
     QString error;
     if (!database_.recordCoaching(result.gameId, result.ply, result.model,
                                   result.diagnosis, result.evidence,
@@ -241,14 +385,155 @@ void MainWindow::startNewGame()
         }
     }
 
+    QString error;
+    if (current_game_id_ >= 0 &&
+        board_widget_->game().result() == XiangqiGame::GameResult::Ongoing) {
+        database_.abandonGame(current_game_id_, &error);
+    }
     board_widget_->newGame();
     analysis_browser_->clear();
-    QString error;
-    current_game_id_ = database_.startGame(&error);
+    current_game_id_ = database_.startGame(active_user_id_, &error);
     if (current_game_id_ < 0) {
         QMessageBox::warning(this, QString::fromUtf8(u8"无法创建新对局"), error);
     }
     refreshStats();
+}
+
+void MainWindow::undoTurn()
+{
+    const int undone = board_widget_->undoTurn();
+    if (undone == 0) {
+        QMessageBox::information(this,
+                                 QString::fromUtf8(u8"无法悔棋"),
+                                 QString::fromUtf8(u8"当前还没有可以撤销的走法。"));
+        return;
+    }
+
+    QString error;
+    const int lastKeptPly = static_cast<int>(board_widget_->game().moveHistory().size());
+    if (current_game_id_ >= 0 &&
+        !database_.truncateGame(current_game_id_, lastKeptPly, &error)) {
+        QMessageBox::warning(this,
+                             QString::fromUtf8(u8"悔棋记录错误"),
+                             QString::fromUtf8(u8"棋盘已经退回，但数据库同步失败：") + error);
+    }
+
+    analysis_browser_->clear();
+    analysis_browser_->append(QString::fromUtf8(
+        u8"<p style='color:#555'>已悔棋，撤销 %1 步。后续分析将以当前局面为准。</p>")
+        .arg(undone));
+    refreshStats();
+}
+
+void MainWindow::startPersonalTraining()
+{
+    TrainingDialog dialog(&database_, active_user_id_, this);
+    dialog.exec();
+    refreshStats();
+}
+
+void MainWindow::populateUsers()
+{
+    const QSignalBlocker blocker(user_combo_);
+    user_combo_->clear();
+    const QVector<GameDatabase::User> users = database_.users();
+    int selectedIndex = 0;
+    for (const auto &user : users) {
+        user_combo_->addItem(user.name, user.id);
+        if (user.id == active_user_id_) {
+            selectedIndex = user_combo_->count() - 1;
+        }
+    }
+    user_combo_->setCurrentIndex(selectedIndex);
+}
+
+void MainWindow::createUser()
+{
+    bool accepted = false;
+    const QString name = QInputDialog::getText(
+        this, QString::fromUtf8(u8"新建用户"),
+        QString::fromUtf8(u8"请输入用户名："), QLineEdit::Normal,
+        QString(), &accepted).trimmed();
+    if (!accepted || name.isEmpty()) {
+        return;
+    }
+
+    QString error;
+    const qint64 userId = database_.createUser(name, &error);
+    if (userId < 0) {
+        QMessageBox::warning(this, QString::fromUtf8(u8"无法创建用户"), error);
+        return;
+    }
+    populateUsers();
+    const int index = user_combo_->findData(userId);
+    if (index >= 0) {
+        user_combo_->setCurrentIndex(index);
+    }
+}
+
+void MainWindow::switchUser(int comboIndex)
+{
+    if (comboIndex < 0) {
+        return;
+    }
+    const qint64 newUserId = user_combo_->itemData(comboIndex).toLongLong();
+    if (newUserId <= 0 || newUserId == active_user_id_) {
+        return;
+    }
+
+    if (!board_widget_->game().moveHistory().empty() &&
+        board_widget_->game().result() == XiangqiGame::GameResult::Ongoing) {
+        const auto answer = QMessageBox::question(
+            this, QString::fromUtf8(u8"切换用户"),
+            QString::fromUtf8(u8"切换用户会结束当前未完成的对局，确定继续吗？"));
+        if (answer != QMessageBox::Yes) {
+            const QSignalBlocker blocker(user_combo_);
+            user_combo_->setCurrentIndex(user_combo_->findData(active_user_id_));
+            return;
+        }
+    }
+
+    QString error;
+    if (current_game_id_ >= 0 &&
+        board_widget_->game().result() == XiangqiGame::GameResult::Ongoing) {
+        database_.abandonGame(current_game_id_, &error);
+    }
+    if (!database_.setSelectedUserId(newUserId, &error)) {
+        QMessageBox::warning(this, QString::fromUtf8(u8"切换用户失败"), error);
+        const QSignalBlocker blocker(user_combo_);
+        user_combo_->setCurrentIndex(user_combo_->findData(active_user_id_));
+        return;
+    }
+    active_user_id_ = newUserId;
+
+    board_widget_->newGame();
+    analysis_browser_->clear();
+    current_game_id_ = database_.startGame(active_user_id_, &error);
+    if (current_game_id_ < 0) {
+        QMessageBox::warning(this, QString::fromUtf8(u8"无法创建用户对局"), error);
+    }
+    database_.generateTrainingPositions(active_user_id_);
+    refreshStats();
+    showMilestoneReportIfNeeded();
+}
+
+void MainWindow::showMilestoneReportIfNeeded()
+{
+    bool created = false;
+    QString error;
+    const GameDatabase::ProfileReport report =
+        database_.generateMilestoneReport(active_user_id_, &created, &error);
+    if (!error.isEmpty()) {
+        engine_status_label_->setText(QString::fromUtf8(u8"生成阶段总结失败：") + error);
+        return;
+    }
+    if (created && report.id >= 0) {
+        QMessageBox::information(
+            this,
+            QString::fromUtf8(u8"个人阶段总结 · 第 %1 盘").arg(report.throughGames),
+            report.summary);
+        refreshStats();
+    }
 }
 
 void MainWindow::configureDeepSeek()
@@ -323,12 +608,28 @@ void MainWindow::configureDeepSeek()
 
 void MainWindow::refreshStats()
 {
-    const GameDatabase::TrainingStats stats = database_.trainingStats();
+    const GameDatabase::TrainingStats stats = database_.trainingStats(active_user_id_);
+    const GameDatabase::TrainingSummary training = database_.trainingSummary(active_user_id_);
+    const GameDatabase::UserProfile profile = database_.userProfile(active_user_id_);
+    const QVector<GameDatabase::ProfileReport> reports =
+        database_.profileReports(active_user_id_);
+    QString latestReport = QString::fromUtf8(u8"完成 10 盘有效对局后生成第一份阶段总结。");
+    if (!reports.isEmpty()) {
+        latestReport = reports.front().summary.toHtmlEscaped();
+        latestReport.replace("\n", "<br>");
+    }
+    const QString userName = user_combo_ ? user_combo_->currentText() : QString();
     stats_browser_->setHtml(QString::fromUtf8(
-        u8"累计对局：%1<br>已分析红方走法：%2　AI讲解：%3<br>"
+        u8"<h3>%13 的个人画像</h3>"
+        u8"有效对局：%1　胜/负/和：%14/%15/%16<br>"
+        u8"已分析红方走法：%2　AI讲解：%3<br>"
         u8"优秀：%4　轻微失误：%5<br>"
         u8"明显失误：%6　严重失误：%7<br>"
-        u8"平均局面损失：%8")
+        u8"平均局面损失：%8　平均思考：%17 秒<hr>"
+        u8"<b>当前训练重点</b><br>%18<hr>"
+        u8"个人错题：%9　今日到期：%10<br>"
+        u8"累计训练：%11　答对：%12<hr>"
+        u8"<b>最近阶段总结</b><br>%19")
         .arg(stats.games)
         .arg(stats.analyzedMoves)
         .arg(stats.coachedMoves)
@@ -336,5 +637,35 @@ void MainWindow::refreshStats()
         .arg(stats.inaccuracies)
         .arg(stats.mistakes)
         .arg(stats.blunders)
-        .arg(stats.averageLoss, 0, 'f', 1));
+        .arg(stats.averageLoss, 0, 'f', 1)
+        .arg(training.positions)
+        .arg(training.due)
+        .arg(training.attempts)
+        .arg(training.correctAttempts)
+        .arg(userName.toHtmlEscaped())
+        .arg(profile.wins)
+        .arg(profile.losses)
+        .arg(profile.draws)
+        .arg(profile.averageThinkingTimeMs / 1000.0, 0, 'f', 1)
+        .arg(profile.mainWeakness.toHtmlEscaped())
+        .arg(latestReport));
+}
+
+bool MainWindow::isCurrentMove(qint64 gameId, int ply, const QString &uciMove) const
+{
+    if (gameId != current_game_id_ || ply <= 0) {
+        return false;
+    }
+    const auto &history = board_widget_->game().moveHistory();
+    if (ply > static_cast<int>(history.size())) {
+        return false;
+    }
+
+    const XiangqiGame::MoveRecord &move = history[static_cast<std::size_t>(ply - 1)];
+    auto square = [](int row, int col) {
+        return QString(QChar('a' + col)) + QChar('9' - row);
+    };
+    const QString currentUci = square(move.fromRow, move.fromCol) +
+                               square(move.toRow, move.toCol);
+    return currentUci == uciMove;
 }
