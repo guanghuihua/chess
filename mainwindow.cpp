@@ -5,6 +5,7 @@
 #include "training_dialog.h"
 #include "profile_dashboard_widget.h"
 #include "game_review_dialog.h"
+#include "engine_variation_dialog.h"
 
 #include <algorithm>
 #include <QFont>
@@ -859,46 +860,14 @@ void MainWindow::showEngineRecommendation(int ply)
     const auto it = current_analyses_.constFind(ply);
     if (it == current_analyses_.constEnd()) return;
     const auto &result = it.value();
-    if (result.bestMove.size() < 4 || result.boardBefore.isEmpty()) return;
-    const int fromCol = result.bestMove.at(0).toLatin1() - 'a';
-    const int fromRow = 9 - result.bestMove.at(1).digitValue();
-    const int toCol = result.bestMove.at(2).toLatin1() - 'a';
-    const int toRow = 9 - result.bestMove.at(3).digitValue();
+    const QString variation = result.rawPrincipalVariation.isEmpty()
+        ? result.bestMove : result.rawPrincipalVariation;
+    if (variation.isEmpty() || result.boardBefore.isEmpty()) return;
 
-    QDialog dialog(this);
-    dialog.setWindowTitle(QString::fromUtf8(u8"Pikafish 推荐着 · 第 %1 步").arg(ply));
-    dialog.resize(720, 820);
-    auto *layout = new QVBoxLayout(&dialog);
-    auto *title = new QLabel(QString::fromUtf8(u8"Pikafish 推荐：%1")
-                                 .arg(result.bestNotation), &dialog);
-    title->setObjectName("recommendationTitle");
-    auto *summary = new QLabel(
-        QString::fromUtf8(u8"实战 %1　·　推荐 %2　·　评价下降 %3 分\n"
-                         u8"棋盘上的粗箭头表示引擎推荐走法。")
-            .arg(result.actualNotation, result.bestNotation)
-            .arg(result.scoreLoss), &dialog);
-    summary->setWordWrap(true);
-    summary->setObjectName("recommendationSummary");
-    auto *board = new XiangqiBoardWidget(&dialog, false);
-    board->setMinimumSize(580, 640);
-    board->loadReviewPosition(result.boardBefore.toStdString(), XiangqiGame::Side::Red,
-                              fromRow, fromCol, toRow, toCol);
-    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
-    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::accept);
-    layout->addWidget(title);
-    layout->addWidget(summary);
-    layout->addWidget(board, 1);
-    layout->addWidget(buttons);
-    dialog.setStyleSheet(QString::fromUtf8(R"(
-        QDialog { background:#f4f1e9; font-family:"Microsoft YaHei UI","Segoe UI"; }
-        QLabel#recommendationTitle { font-size:18px; font-weight:700; color:#27363d; }
-        QLabel#recommendationSummary {
-            color:#5d625f; background:#fffdf8; border:1px solid #d8d1c5;
-            border-radius:6px; padding:9px; font-size:13px;
-        }
-        QPushButton { min-height:32px; padding:0 18px; border:1px solid #c8c2b8;
-                      border-radius:6px; background:#fffdf8; }
-    )"));
+    EngineVariationDialog dialog(
+        result.boardBefore, result.sideToMove, variation,
+        QString::fromUtf8(u8"Pikafish 主变招 · 第 %1 步 · 推荐 %2")
+            .arg(ply).arg(result.bestNotation), this);
     dialog.exec();
 }
 

@@ -39,6 +39,8 @@ set(PROJECT_SOURCES
         profile_dashboard_widget.h
         game_review_dialog.cpp
         game_review_dialog.h
+        engine_variation_dialog.cpp
+        engine_variation_dialog.h
 )
 
 if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
@@ -143,6 +145,21 @@ target_link_libraries(training_ui_smoke_test PRIVATE
 )
 target_include_directories(training_ui_smoke_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME training_ui_smoke_test COMMAND training_ui_smoke_test)
+
+add_executable(engine_variation_dialog_test
+    tests/engine_variation_dialog_test.cpp
+    engine_variation_dialog.cpp
+    engine_variation_dialog.h
+    xiangqi_board_widget.cpp
+    xiangqi_board_widget.h
+    xiangqi_game.cpp
+    xiangqi_game.h
+    pikafish_analyzer.cpp
+    pikafish_analyzer.h
+)
+target_link_libraries(engine_variation_dialog_test PRIVATE Qt${QT_VERSION_MAJOR}::Widgets)
+target_include_directories(engine_variation_dialog_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME engine_variation_dialog_test COMMAND engine_variation_dialog_test)
 
 add_executable(multi_user_profile_test
     tests/multi_user_profile_test.cpp

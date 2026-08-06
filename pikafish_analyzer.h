@@ -26,6 +26,8 @@ public:
         int scoreLoss = 0;
         QString category;
         QString principalVariation;
+        QString rawPrincipalVariation;
+        XiangqiGame::Side sideToMove = XiangqiGame::Side::Red;
         QString explanation;
         QString boardBefore;
         qint64 thinkingTimeMs = 0;

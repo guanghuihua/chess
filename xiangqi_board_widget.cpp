@@ -485,42 +485,21 @@ void XiangqiBoardWidget::drawLastMove(QPainter &painter)
     const QPointF from = intersectionPoint(fromRow, fromCol);
     const QPointF to = intersectionPoint(toRow, toCol);
     const double cell = cellSize();
-    const double markerRadius = cell * 0.40;
 
     painter.save();
     painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.setPen(QPen(QColor(176, 107, 24, 220),
-                        std::max(3.0, cell * 0.060), Qt::SolidLine, Qt::RoundCap));
-    painter.setBrush(QColor(225, 158, 48, 38));
-    painter.drawEllipse(from, markerRadius, markerRadius);
-    painter.setPen(QPen(QColor(25, 112, 78, 230),
-                        std::max(3.2, cell * 0.065), Qt::SolidLine, Qt::RoundCap));
-    painter.setBrush(QColor(42, 137, 93, 42));
-    painter.drawEllipse(to, markerRadius, markerRadius);
+    const double side = cell * 0.82;
+    const auto square = [side](const QPointF &center) {
+        return QRectF(center.x() - side / 2.0, center.y() - side / 2.0, side, side);
+    };
 
-    QLineF direction(from, to);
-    if (direction.length() > 0.0) {
-        const QPointF unit = (to - from) / direction.length();
-        const QPointF normal(-unit.y(), unit.x());
-        const QPointF lineStart = from + unit * (cell * 0.18);
-        const QPointF lineEnd = to - unit * (cell * 0.22);
-
-        painter.setPen(QPen(QColor(24, 103, 82, 225),
-                            std::max(4.0, cell * 0.070),
-                            Qt::SolidLine, Qt::RoundCap));
-        painter.drawLine(lineStart, lineEnd);
-
-        const double arrowLength = cell * 0.25;
-        const double arrowWidth = cell * 0.16;
-        const QPolygonF arrow{
-            lineEnd,
-            lineEnd - unit * arrowLength + normal * arrowWidth,
-            lineEnd - unit * arrowLength - normal * arrowWidth
-        };
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(QColor(24, 103, 82, 235));
-        painter.drawPolygon(arrow);
-    }
+    // Square highlights keep both endpoints visible without obscuring the pieces.
+    painter.setPen(QPen(QColor(180, 122, 28, 190), std::max(1.4, cell * 0.025)));
+    painter.setBrush(QColor(238, 188, 70, 72));
+    painter.drawRoundedRect(square(from), cell * 0.08, cell * 0.08);
+    painter.setPen(QPen(QColor(34, 115, 78, 205), std::max(1.4, cell * 0.025)));
+    painter.setBrush(QColor(60, 151, 98, 88));
+    painter.drawRoundedRect(square(to), cell * 0.08, cell * 0.08);
 
     painter.restore();
 }
