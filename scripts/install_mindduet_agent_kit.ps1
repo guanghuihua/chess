@@ -18,14 +18,22 @@ New-Item -ItemType Directory -Path $installDirectory -Force | Out-Null
 New-Item -ItemType Directory -Path $codexDirectory -Force | Out-Null
 
 $kitFiles = @(
-    "MindDuetCredential.ps1",
-    "mindduet-agent.ps1",
-    "mindduet-init.ps1",
-    "mindduet-agent.cmd",
-    "mindduet-init.cmd"
+    @{ Source = "MindDuetCredential.ps1"; Destination = "MindDuetCredential.ps1" },
+    @{ Source = "mindduet-agent.ps1"; Destination = "mindduet-agent-core.ps1" },
+    @{ Source = "mindduet-init.ps1"; Destination = "mindduet-init-core.ps1" },
+    @{ Source = "mindduet-agent.cmd"; Destination = "mindduet-agent.cmd" },
+    @{ Source = "mindduet-init.cmd"; Destination = "mindduet-init.cmd" }
 )
-foreach ($fileName in $kitFiles) {
-    Copy-Item -LiteralPath (Join-Path $sourceDirectory $fileName) -Destination (Join-Path $installDirectory $fileName) -Force
+foreach ($file in $kitFiles) {
+    Copy-Item -LiteralPath (Join-Path $sourceDirectory $file.Source) -Destination (Join-Path $installDirectory $file.Destination) -Force
+}
+
+$obsoletePublicScripts = @("mindduet-agent.ps1", "mindduet-init.ps1")
+foreach ($fileName in $obsoletePublicScripts) {
+    $obsoletePath = Join-Path $installDirectory $fileName
+    if (Test-Path -LiteralPath $obsoletePath) {
+        Remove-Item -LiteralPath $obsoletePath -Force
+    }
 }
 
 if (-not (Test-Path -LiteralPath $packyProfilePath)) {

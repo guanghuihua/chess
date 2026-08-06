@@ -49,16 +49,21 @@ if (-not (Test-Path -LiteralPath $agentsPath)) {
     Write-Output "Kept existing AGENTS.md"
 }
 
-$ignoreEntries = @("/APIKEY", ".env", ".env.*", ".aider*")
+$ignoreEntries = @(
+    @{ Value = "/APIKEY"; Equivalents = @("/APIKEY", "APIKEY") },
+    @{ Value = ".env"; Equivalents = @(".env", "/.env") },
+    @{ Value = ".env.*"; Equivalents = @(".env.*", "/.env.*") },
+    @{ Value = ".aider*"; Equivalents = @(".aider*", "/.aider*") }
+)
 $existingIgnore = if (Test-Path -LiteralPath $gitignorePath) {
     @(Get-Content -LiteralPath $gitignorePath -Encoding UTF8)
 } else {
     @()
 }
 foreach ($entry in $ignoreEntries) {
-    if ($existingIgnore -notcontains $entry) {
-        Add-Content -LiteralPath $gitignorePath -Value $entry -Encoding UTF8
-        $existingIgnore += $entry
+    if (-not @($entry.Equivalents | Where-Object { $existingIgnore -contains $_ }).Count) {
+        Add-Content -LiteralPath $gitignorePath -Value $entry.Value -Encoding UTF8
+        $existingIgnore += $entry.Value
     }
 }
 
@@ -66,10 +71,8 @@ New-Item -ItemType Directory -Path $vscodeDirectory -Force | Out-Null
 $packyTask = [ordered]@{
     label = "Start Packy Codex Agent"
     type = "shell"
-    command = "powershell.exe"
+    command = '${env:LOCALAPPDATA}\MindDuet\AgentKit\mindduet-agent.cmd'
     args = @(
-        "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-        '${env:LOCALAPPDATA}\MindDuet\AgentKit\mindduet-agent.ps1',
         "packy", "-ProjectRoot", '${workspaceFolder}'
     )
     problemMatcher = @()
@@ -79,10 +82,8 @@ $packyTask = [ordered]@{
 $deepSeekTask = [ordered]@{
     label = "Start DeepSeek Agent (Cheap Tasks)"
     type = "shell"
-    command = "powershell.exe"
+    command = '${env:LOCALAPPDATA}\MindDuet\AgentKit\mindduet-agent.cmd'
     args = @(
-        "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-        '${env:LOCALAPPDATA}\MindDuet\AgentKit\mindduet-agent.ps1',
         "deepseek", "-ProjectRoot", '${workspaceFolder}'
     )
     problemMatcher = @()

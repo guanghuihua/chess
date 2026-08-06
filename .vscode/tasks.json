@@ -4,14 +4,8 @@
     {
       "label": "Start Packy Codex Agent",
       "type": "shell",
-      "command": "powershell.exe",
+      "command": "${env:LOCALAPPDATA}\\MindDuet\\AgentKit\\mindduet-agent.cmd",
       "args": [
-        "-NoLogo",
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        "${env:LOCALAPPDATA}\\MindDuet\\AgentKit\\mindduet-agent.ps1",
         "packy",
         "-ProjectRoot",
         "${workspaceFolder}"
@@ -33,14 +27,8 @@
     {
       "label": "Start DeepSeek Agent (Cheap Tasks)",
       "type": "shell",
-      "command": "powershell.exe",
+      "command": "${env:LOCALAPPDATA}\\MindDuet\\AgentKit\\mindduet-agent.cmd",
       "args": [
-        "-NoLogo",
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        "${env:LOCALAPPDATA}\\MindDuet\\AgentKit\\mindduet-agent.ps1",
         "deepseek",
         "-ProjectRoot",
         "${workspaceFolder}"

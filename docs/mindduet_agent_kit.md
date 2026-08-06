@@ -16,6 +16,8 @@ MindDuet Agent Kit 为 Windows 上的不同项目提供统一的本地 AI Agent 
 
 安装器会把该目录加入当前用户的 PATH。安装后需要重新打开 VS Code 或终端，短命令才会生效。
 
+公开命令由 `.cmd` 包装器提供，内部 PowerShell 脚本使用 `*-core.ps1` 名称并由包装器以 `-ExecutionPolicy Bypass` 启动，因此不要求修改系统的全局 PowerShell 执行策略。
+
 ## 安装或更新
 
 在 MindDuet Chess 仓库中运行：
