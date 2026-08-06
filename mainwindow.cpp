@@ -105,7 +105,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     auto *panel = new QFrame(splitter);
     panel->setObjectName("contentCard");
-    panel->setMinimumWidth(350);
+    panel->setMinimumWidth(430);
     auto *panelLayout = new QVBoxLayout(panel);
     panelLayout->setContentsMargins(16, 14, 16, 14);
     panelLayout->setSpacing(10);
@@ -124,17 +124,34 @@ MainWindow::MainWindow(QWidget *parent)
     coach_status_label_->setObjectName("statusPill");
     panelLayout->addWidget(coach_status_label_);
 
-    auto *tabs = new QTabWidget(panel);
-    auto *analysisTab = new QWidget(tabs);
+    tabs_ = new QTabWidget(panel);
+
+    auto *coachTab = new QWidget(tabs_);
+    auto *coachLayout = new QVBoxLayout(coachTab);
+    coachLayout->setContentsMargins(0, 10, 0, 0);
+    auto *coachHint = new QLabel(QString::fromUtf8(
+        u8"AI 教练会把引擎结论转化为可执行的改进建议；对局结束后，这里会显示整盘总结。"),
+        coachTab);
+    coachHint->setWordWrap(true);
+    coachHint->setObjectName("coachHint");
+    coachLayout->addWidget(coachHint);
+    ai_advice_browser_ = new QTextBrowser(coachTab);
+    ai_advice_browser_->setObjectName("aiAdviceBrowser");
+    ai_advice_browser_->setPlaceholderText(QString::fromUtf8(
+        u8"出现值得学习的着法后，AI 会在这里解释原因并给出训练任务。"));
+    coachLayout->addWidget(ai_advice_browser_, 1);
+    tabs_->addTab(coachTab, QString::fromUtf8(u8"AI 教练"));
+
+    auto *analysisTab = new QWidget(tabs_);
     auto *analysisLayout = new QVBoxLayout(analysisTab);
     analysisLayout->setContentsMargins(0, 10, 0, 0);
     analysis_browser_ = new QTextBrowser(analysisTab);
     analysis_browser_->setPlaceholderText(QString::fromUtf8(
         u8"你执红方。每走一步，系统会显示推荐走法、局面损失和训练建议。"));
     analysisLayout->addWidget(analysis_browser_);
-    tabs->addTab(analysisTab, QString::fromUtf8(u8"实时复盘"));
+    tabs_->addTab(analysisTab, QString::fromUtf8(u8"引擎分析"));
 
-    auto *statsTab = new QWidget(tabs);
+    auto *statsTab = new QWidget(tabs_);
     auto *statsLayout = new QVBoxLayout(statsTab);
     statsLayout->setContentsMargins(0, 6, 0, 0);
     auto *statsScroll = new QScrollArea(statsTab);
@@ -157,19 +174,19 @@ MainWindow::MainWindow(QWidget *parent)
     statsContentLayout->addWidget(database_label_);
     statsScroll->setWidget(statsContent);
     statsLayout->addWidget(statsScroll);
-    tabs->addTab(statsTab, QString::fromUtf8(u8"个人统计"));
-    panelLayout->addWidget(tabs, 1);
+    tabs_->addTab(statsTab, QString::fromUtf8(u8"个人统计"));
+    panelLayout->addWidget(tabs_, 1);
 
     splitter->addWidget(boardCard);
     splitter->addWidget(panel);
     splitter->setStretchFactor(0, 3);
     splitter->setStretchFactor(1, 2);
-    splitter->setSizes({760, 430});
+    splitter->setSizes({760, 520});
     rootLayout->addWidget(splitter, 1);
     setCentralWidget(central);
     setWindowTitle(QString::fromUtf8(u8"象棋个性化训练系统"));
     setMinimumSize(1020, 700);
-    resize(1260, 800);
+    resize(1380, 860);
 
     setStyleSheet(QString::fromUtf8(R"(
         QMainWindow, QWidget#appRoot { background: #f4f1e9; color: #26231f; }
@@ -185,6 +202,10 @@ MainWindow::MainWindow(QWidget *parent)
             border-radius: 6px; padding: 7px 9px; color: #625b51;
         }
         QLabel#databasePath { color: #777067; font-size: 11px; padding-top: 4px; }
+        QLabel#coachHint {
+            color: #695b46; background: #f7f1e5; border: 1px solid #eadfc9;
+            border-radius: 6px; padding: 9px; font-size: 12px;
+        }
         QPushButton {
             min-height: 32px; padding: 0 14px; border-radius: 6px;
             border: 1px solid #cfc6b7; background: #fffdf8;
@@ -207,6 +228,10 @@ MainWindow::MainWindow(QWidget *parent)
         QTabBar::tab { padding: 8px 16px; color: #665f55; }
         QTabBar::tab:selected { color: #8f382b; font-weight: 600; }
         QTextBrowser { border: none; background: white; padding: 8px; }
+        QTextBrowser#aiAdviceBrowser {
+            font-size: 15px; line-height: 1.55; padding: 14px;
+            selection-background-color: #c9b8ea;
+        }
         QSplitter::handle { background: transparent; }
     )"));
 
@@ -319,6 +344,15 @@ void MainWindow::handleGameEnded()
         return;
     }
     pending_game_reviews_.insert(current_game_id_);
+    if (ai_advice_browser_) {
+        const QString progress = coach_ && coach_->isConfigured()
+            ? QString::fromUtf8(u8"正在等待引擎完成剩余分析，然后生成整盘 AI 建议……")
+            : QString::fromUtf8(u8"引擎分析会继续保存；配置 DeepSeek 后可生成整盘 AI 建议。");
+        ai_advice_browser_->append(QString::fromUtf8(
+            u8"<div style='background:#f7f1e5;border-radius:8px;padding:12px;margin:10px 0'>"
+            u8"<b>本局已经结束</b><br>%1</div>").arg(progress));
+    }
+    if (tabs_) tabs_->setCurrentIndex(0);
     requestPendingGameReviews();
     refreshStats();
     showMilestoneReportIfNeeded();
@@ -404,14 +438,14 @@ void MainWindow::handleCoaching(const DeepSeekCoach::CoachingResult &result)
              result.evidence.toHtmlEscaped(),
              result.trainingTask.toHtmlEscaped(),
              result.reflectionQuestion.toHtmlEscaped());
-    analysis_browser_->append(html);
+    ai_advice_browser_->append(html);
+    if (tabs_) tabs_->setCurrentIndex(0);
     refreshStats();
 }
 
 void MainWindow::requestPendingGameReviews()
 {
-    if (!coach_ || !coach_->isConfigured() || !analyzer_
-        || analyzer_->hasPendingAnalysis()) {
+    if (!analyzer_ || analyzer_->hasPendingAnalysis()) {
         return;
     }
 
@@ -428,7 +462,30 @@ void MainWindow::requestPendingGameReviews()
             coach_status_label_->setText(QString::fromUtf8(u8"无法准备整盘复盘：") + error);
             continue;
         }
-        coach_->requestGameReview(context, database_.trainingStats(context.userId));
+        if (coach_ && coach_->isConfigured()) {
+            coach_->requestGameReview(context, database_.trainingStats(context.userId));
+        } else {
+            DeepSeekCoach::GameReviewResult localReview;
+            localReview.gameId = context.gameId;
+            localReview.userId = context.userId;
+            localReview.model = QStringLiteral("local-engine-coach");
+            localReview.overview = QString::fromUtf8(
+                u8"本局共走 %1 步，红方 %2 步得到引擎分析，平均局面损失为 %3。"
+                u8"这是依据引擎数据生成的离线总结；配置 DeepSeek 后可获得更深入的思考模式分析。")
+                .arg(context.totalMoves).arg(context.analyzedMoves)
+                .arg(context.averageLoss, 0, 'f', 1);
+            localReview.turningPoints = context.keyMoments;
+            localReview.strengths = context.blunders == 0
+                ? QString::fromUtf8(u8"本局没有被引擎判定为严重失误的红方着法。")
+                : QString::fromUtf8(u8"你完成了整盘对局，并留下了可用于针对训练的真实决策数据。");
+            localReview.recurringPattern = context.undoSummary;
+            localReview.trainingPlan = context.blunders > 0
+                ? QString::fromUtf8(u8"1. 练习本局损失最大的局面；2. 落子前固定检查将军、吃子和直接威胁；3. 一周后再次测试同类局面。")
+                : QString::fromUtf8(u8"1. 复查关键转折点；2. 比较实际着与引擎推荐着；3. 用一句话写下当时的候选着。");
+            localReview.reflectionQuestion = QString::fromUtf8(
+                u8"本局哪一步最能反映你的思考习惯？如果重新选择，你会先检查什么？");
+            handleGameReview(localReview);
+        }
         pending_game_reviews_.remove(gameId);
     }
 }
@@ -462,23 +519,27 @@ void MainWindow::handleGameReview(const DeepSeekCoach::GameReviewResult &result)
     auto htmlText = [](QString text) {
         return text.toHtmlEscaped().replace("\n", "<br>");
     };
+    const QString reviewTitle = result.model == QStringLiteral("local-engine-coach")
+        ? QString::fromUtf8(u8"整盘离线教练总结")
+        : QString::fromUtf8(u8"整盘 AI 复盘");
     const QString html = QString(
         "<div style='border:1px solid #cbb9e8; background:#f8f5ff; border-radius:8px; "
-        "padding:12px; margin:14px 0'>"
-        "<h3 style='color:#513a86; margin-top:0'>整盘 AI 复盘</h3>"
-        "<b>总体评价</b><br>%1<br><br>"
-        "<b>关键转折点</b><br>%2<br><br>"
-        "<b>做得好的地方</b><br>%3<br><br>"
-        "<b>可能重复的思考模式</b><br>%4<br><br>"
-        "<b>下一阶段训练计划</b><br>%5<br><br>"
-        "<b>复盘问题</b><br>%6</div>")
-        .arg(htmlText(result.overview), htmlText(result.turningPoints),
+        "padding:16px; margin:14px 0'>"
+        "<h2 style='color:#513a86; margin-top:0'>%1</h2>"
+        "<b>总体评价</b><br>%2<br><br>"
+        "<b>关键转折点</b><br>%3<br><br>"
+        "<b>做得好的地方</b><br>%4<br><br>"
+        "<b>可能重复的思考模式</b><br>%5<br><br>"
+        "<b>下一阶段训练计划</b><br>%6<br><br>"
+        "<b>复盘问题</b><br>%7</div>")
+        .arg(reviewTitle, htmlText(result.overview), htmlText(result.turningPoints),
              htmlText(result.strengths), htmlText(result.recurringPattern),
              htmlText(result.trainingPlan), htmlText(result.reflectionQuestion));
-    analysis_browser_->append(html);
-    QMessageBox::information(
-        this, QString::fromUtf8(u8"整盘 AI 复盘已完成"),
-        QString::fromUtf8(u8"本局的整体分析已经生成并保存，请在“走法分析”中查看。"));
+    ai_advice_browser_->append(html);
+    if (tabs_) tabs_->setCurrentIndex(0);
+    coach_status_label_->setText(result.model == QStringLiteral("local-engine-coach")
+        ? QString::fromUtf8(u8"整盘离线教练总结已生成并保存")
+        : QString::fromUtf8(u8"整盘 AI 建议已生成并保存"));
 }
 
 void MainWindow::startNewGame()
@@ -501,6 +562,9 @@ void MainWindow::startNewGame()
     board_widget_->newGame();
     current_game_end_reason_ = QStringLiteral("normal");
     analysis_browser_->clear();
+    ai_advice_browser_->clear();
+    ai_advice_browser_->append(QString::fromUtf8(
+        u8"<p style='color:#6d6256'>新对局已开始。AI 会重点解释有训练价值的决策，而不是打断每一步棋。</p>"));
     current_game_id_ = database_.startGame(active_user_id_, &error);
     if (current_game_id_ < 0) {
         QMessageBox::warning(this, QString::fromUtf8(u8"无法创建新对局"), error);
@@ -568,6 +632,9 @@ void MainWindow::undoTurn()
         .arg(evidenceSaved
                  ? QString::fromUtf8(u8"原着已作为个人学习证据保存；")
                  : QString::fromUtf8(u8"本次学习证据保存失败；")));
+    ai_advice_browser_->append(QString::fromUtf8(
+        u8"<div style='border-left:4px solid #b47b32;padding:8px 12px;margin:10px 0'>"
+        u8"<b>悔棋已记录</b><br>被撤销的用户着法会进入个人画像，后续训练将重点检查类似决策。</div>"));
     refreshStats();
 }
 

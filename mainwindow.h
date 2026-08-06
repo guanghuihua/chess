@@ -17,6 +17,7 @@ QT_END_NAMESPACE
 
 class QLabel;
 class QComboBox;
+class QTabWidget;
 class QTextBrowser;
 class XiangqiBoardWidget;
 class ProfileDashboardWidget;
@@ -36,7 +37,9 @@ private:
     QLabel *coach_status_label_ = nullptr;
     QLabel *database_label_ = nullptr;
     QTextBrowser *analysis_browser_ = nullptr;
+    QTextBrowser *ai_advice_browser_ = nullptr;
     QTextBrowser *stats_browser_ = nullptr;
+    QTabWidget *tabs_ = nullptr;
     QComboBox *user_combo_ = nullptr;
     ProfileDashboardWidget *profile_dashboard_ = nullptr;
     GameDatabase database_;
