@@ -146,6 +146,14 @@ powershell -ExecutionPolicy Bypass -File scripts/codex-packy.ps1
 
 该启动器会临时读取 `APIKEY`，使用用户目录中的独立 `packy` Codex 配置档和 `gpt-5.6-terra`，并自动加载项目根目录的 `AGENTS.md`。退出 Agent 后不会在 PowerShell 环境中保留密钥，也不会改变 Codex 桌面应用原有的官方登录。
 
+对于改文案、解释代码、局部重构和简单脚本等低风险任务，可以从同一任务列表运行：
+
+```text
+Start DeepSeek Agent (Cheap Tasks)
+```
+
+当前 Codex CLI 只支持 Responses 协议，而 DeepSeek 官方 API 使用 Chat Completions，因此廉价入口使用 Aider 作为 Agent 外壳，并选择 `deepseek/deepseek-v4-flash`。启动器从 MindDuet Chess 已保存的 Windows Credential Manager 凭据中临时读取 DeepSeek 密钥，加载 `AGENTS.md`，并关闭 Aider 自动提交。复杂功能、跨模块修改、数据库迁移和最终审查仍应使用 Packy Codex。
+
 Packy 模式使用 `gpt-5.6-terra`（中等推理）生成单步讲解和追问，使用 `gpt-5.6-sol`（高推理）生成整盘复盘；DeepSeek 后备模式使用 `deepseek-v4-flash` 和 `deepseek-v4-pro`。为了控制费用，优秀着法使用本地说明，只有局面损失超过 30 时才请求单步讲解。单步分析会携带从开局到当前的正式棋谱、既有引擎结论和全部悔棋分支，并强制输出具体线路、对手回应、推荐着真实目的和实战判定标准，禁止“重做三次”“落子前自问”等模板话。整盘复盘包括完整着法序列、胜负、阶段统计、关键转折点、思考时间和全部悔棋证据。解析失败或网络错误会自动重试，仍失败时保存基于 Pikafish 数据的本地复盘。模型只负责解释皮卡鱼证据，不能修改引擎评分或编造变化。
 
 ## 自动化验证

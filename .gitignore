@@ -99,3 +99,4 @@ CMakeLists.txt.user*
 .env.*
 !.env.example
 /APIKEY
+.aider*
