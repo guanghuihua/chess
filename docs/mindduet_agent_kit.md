@@ -73,7 +73,17 @@ mindduet-agent packy
 mindduet-agent deepseek
 ```
 
+让 Packy Codex 在不逐次请求批准的情况下使用完整本机权限：
+
+```powershell
+mindduet-agent packy -FullAccess
+```
+
+该选项等价于 Codex 的 `sandbox = danger-full-access` 与 `approval = never`。Agent 可以在当前 Windows 用户权限范围内读写项目外文件并执行命令，失败时也不会弹出授权问题。它不会扩大任务本身的授权范围，也不会自动成为后台常驻进程。只应在可信项目、明确任务和可恢复的 Git 工作树中使用。
+
 也可以在 VS Code 中按 `Ctrl+Shift+P`，运行 **Tasks: Run Task**，再选择对应 Agent。
+
+VS Code 中的 **Start Packy Codex Agent (Full Access)** 对应上述完整权限模式。
 
 指定其他项目目录：
 

@@ -5,6 +5,8 @@ param(
 
     [string]$ProjectRoot = (Get-Location).Path,
 
+    [switch]$FullAccess,
+
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$AgentArguments
 )
@@ -70,7 +72,11 @@ function Invoke-PackyAgent {
     $previousPackyApiKey = $env:PACKY_API_KEY
     try {
         $env:PACKY_API_KEY = $packyApiKey.Trim()
-        & $codexExecutable -p packy -C $resolvedProjectRoot @AgentArguments
+        $codexBaseArguments = @("-p", "packy", "-C", $resolvedProjectRoot)
+        if ($FullAccess) {
+            $codexBaseArguments += @("-s", "danger-full-access", "-a", "never")
+        }
+        & $codexExecutable @codexBaseArguments @AgentArguments
         $script:mindDuetAgentExitCode = $LASTEXITCODE
     } finally {
         if ($null -eq $previousPackyApiKey) {
@@ -83,6 +89,10 @@ function Invoke-PackyAgent {
 }
 
 function Invoke-DeepSeekAgent {
+    if ($FullAccess) {
+        throw "-FullAccess is supported only by the Packy Codex provider."
+    }
+
     $deepSeekApiKey = (Get-MindDuetCredential -Target $deepSeekCredentialTarget)
     if ([string]::IsNullOrWhiteSpace($deepSeekApiKey)) {
         throw "DeepSeek credential is missing. Save it in MindDuet Chess first."

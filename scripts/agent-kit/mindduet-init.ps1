@@ -79,6 +79,17 @@ $packyTask = [ordered]@{
     presentation = [ordered]@{ reveal = "always"; focus = $true; panel = "dedicated"; clear = $true }
     runOptions = [ordered]@{ instanceLimit = 1 }
 }
+$packyFullAccessTask = [ordered]@{
+    label = "Start Packy Codex Agent (Full Access)"
+    type = "shell"
+    command = '${env:LOCALAPPDATA}\MindDuet\AgentKit\mindduet-agent.cmd'
+    args = @(
+        "packy", "-ProjectRoot", '${workspaceFolder}', "-FullAccess"
+    )
+    problemMatcher = @()
+    presentation = [ordered]@{ reveal = "always"; focus = $true; panel = "dedicated"; clear = $true }
+    runOptions = [ordered]@{ instanceLimit = 1 }
+}
 $deepSeekTask = [ordered]@{
     label = "Start DeepSeek Agent (Cheap Tasks)"
     type = "shell"
@@ -92,7 +103,7 @@ $deepSeekTask = [ordered]@{
 }
 
 if (-not (Test-Path -LiteralPath $tasksPath)) {
-    $tasksDocument = [ordered]@{ version = "2.0.0"; tasks = @($packyTask, $deepSeekTask) }
+    $tasksDocument = [ordered]@{ version = "2.0.0"; tasks = @($packyTask, $packyFullAccessTask, $deepSeekTask) }
     $tasksDocument | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $tasksPath -Encoding UTF8
     Write-Output "Created .vscode/tasks.json"
 } else {
@@ -102,6 +113,10 @@ if (-not (Test-Path -LiteralPath $tasksPath)) {
         $changed = $false
         if ($tasks.label -notcontains $packyTask.label) {
             $tasks += [pscustomobject]$packyTask
+            $changed = $true
+        }
+        if ($tasks.label -notcontains $packyFullAccessTask.label) {
+            $tasks += [pscustomobject]$packyFullAccessTask
             $changed = $true
         }
         if ($tasks.label -notcontains $deepSeekTask.label) {

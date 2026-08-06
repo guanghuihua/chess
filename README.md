@@ -159,6 +159,7 @@ Start DeepSeek Agent (Cheap Tasks)
 ```powershell
 mindduet-init
 mindduet-agent packy
+mindduet-agent packy -FullAccess
 mindduet-agent deepseek
 ```
 
