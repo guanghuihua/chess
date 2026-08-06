@@ -4,6 +4,7 @@
 #include "xiangqi_board_widget.h"
 #include "training_dialog.h"
 #include "profile_dashboard_widget.h"
+#include "game_review_dialog.h"
 
 #include <QFont>
 #include <QComboBox>
@@ -81,6 +82,8 @@ MainWindow::MainWindow(QWidget *parent)
     resignButton->setProperty("danger", true);
     auto *trainingButton = new QPushButton(QString::fromUtf8(u8"专项训练"), header);
     trainingButton->setProperty("secondary", true);
+    auto *reviewButton = new QPushButton(QString::fromUtf8(u8"对局复盘"), header);
+    reviewButton->setProperty("secondary", true);
     auto *deepSeekButton = new QPushButton(QString::fromUtf8(u8"AI 设置"), header);
     deepSeekButton->setProperty("secondary", true);
     auto *newGameButton = new QPushButton(QString::fromUtf8(u8"新对局"), header);
@@ -88,6 +91,7 @@ MainWindow::MainWindow(QWidget *parent)
     headerLayout->addWidget(undoButton);
     headerLayout->addWidget(resignButton);
     headerLayout->addWidget(trainingButton);
+    headerLayout->addWidget(reviewButton);
     headerLayout->addWidget(deepSeekButton);
     headerLayout->addWidget(newGameButton);
     rootLayout->addWidget(header);
@@ -275,6 +279,8 @@ MainWindow::MainWindow(QWidget *parent)
             this, &MainWindow::resignGame);
     connect(trainingButton, &QPushButton::clicked,
             this, &MainWindow::startPersonalTraining);
+    connect(reviewButton, &QPushButton::clicked,
+            this, &MainWindow::openGameReview);
     connect(createUserButton, &QPushButton::clicked,
             this, &MainWindow::createUser);
     connect(user_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
@@ -643,6 +649,12 @@ void MainWindow::startPersonalTraining()
     TrainingDialog dialog(&database_, active_user_id_, this);
     dialog.exec();
     refreshStats();
+}
+
+void MainWindow::openGameReview()
+{
+    GameReviewDialog dialog(&database_, active_user_id_, this);
+    dialog.exec();
 }
 
 void MainWindow::populateUsers()

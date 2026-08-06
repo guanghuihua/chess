@@ -1188,6 +1188,83 @@ QVector<GameDatabase::GamePerformance> GameDatabase::recentGamePerformance(
     return performance;
 }
 
+QVector<GameDatabase::GameSummary> GameDatabase::completedGames(qint64 userId,
+                                                                 int limit) const
+{
+    QVector<GameSummary> games;
+    QSqlQuery query(database_);
+    query.prepare(
+        "SELECT g.id, g.started_at, COALESCE(g.finished_at,''), g.result, g.end_reason, "
+        "COUNT(m.id), CASE WHEN r.id IS NULL THEN 0 ELSE 1 END "
+        "FROM games g LEFT JOIN moves m ON m.game_id=g.id "
+        "LEFT JOIN game_reviews r ON r.game_id=g.id "
+        "WHERE g.user_id=? AND g.result NOT IN ('ongoing','abandoned') "
+        "GROUP BY g.id ORDER BY g.id DESC LIMIT ?");
+    query.addBindValue(userId);
+    query.addBindValue(std::max(1, limit));
+    if (!query.exec()) return games;
+    while (query.next()) {
+        games.push_back(GameSummary{
+            query.value(0).toLongLong(), query.value(1).toString(),
+            query.value(2).toString(), query.value(3).toString(),
+            query.value(4).toString(), query.value(5).toInt(),
+            query.value(6).toBool()});
+    }
+    return games;
+}
+
+QVector<GameDatabase::RecordedMove> GameDatabase::recordedMoves(qint64 gameId) const
+{
+    QVector<RecordedMove> moves;
+    QSqlQuery query(database_);
+    query.prepare(
+        "SELECT m.ply, m.side, m.from_row, m.from_col, m.to_row, m.to_col, "
+        "m.moved_piece, COALESCE(m.captured_piece,''), m.thinking_time_ms, "
+        "m.board_before, m.board_after, COALESCE(a.best_move,''), "
+        "COALESCE(a.best_score,0), COALESCE(a.actual_score,0), "
+        "COALESCE(a.score_loss,0), COALESCE(a.category,''), "
+        "COALESCE(a.principal_variation,''), COALESCE(c.diagnosis,''), "
+        "COALESCE(c.evidence,''), COALESCE(c.training_task,''), "
+        "COALESCE(c.reflection_question,''), CASE WHEN a.id IS NULL THEN 0 ELSE 1 END "
+        "FROM moves m LEFT JOIN analyses a ON a.game_id=m.game_id AND a.ply=m.ply "
+        "LEFT JOIN coaching c ON c.game_id=m.game_id AND c.ply=m.ply "
+        "WHERE m.game_id=? ORDER BY m.ply");
+    query.addBindValue(gameId);
+    if (!query.exec()) return moves;
+    auto square = [](int row, int col) {
+        return QString(QChar('a' + col)) + QChar('9' - row);
+    };
+    while (query.next()) {
+        RecordedMove move;
+        move.ply = query.value(0).toInt();
+        move.side = query.value(1).toString();
+        move.fromRow = query.value(2).toInt();
+        move.fromCol = query.value(3).toInt();
+        move.toRow = query.value(4).toInt();
+        move.toCol = query.value(5).toInt();
+        move.movedPiece = query.value(6).toString();
+        move.capturedPiece = query.value(7).toString();
+        move.thinkingTimeMs = query.value(8).toLongLong();
+        move.boardBefore = query.value(9).toString();
+        move.boardAfter = query.value(10).toString();
+        move.actualMove = square(move.fromRow, move.fromCol)
+                          + square(move.toRow, move.toCol);
+        move.bestMove = query.value(11).toString();
+        move.bestScore = query.value(12).toInt();
+        move.actualScore = query.value(13).toInt();
+        move.scoreLoss = query.value(14).toInt();
+        move.category = query.value(15).toString();
+        move.principalVariation = query.value(16).toString();
+        move.diagnosis = query.value(17).toString();
+        move.evidence = query.value(18).toString();
+        move.trainingTask = query.value(19).toString();
+        move.reflectionQuestion = query.value(20).toString();
+        move.hasAnalysis = query.value(21).toBool();
+        moves.push_back(move);
+    }
+    return moves;
+}
+
 QString GameDatabase::databasePath() const
 {
     return database_path_;

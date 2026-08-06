@@ -61,6 +61,7 @@ private:
     void resignGame();
     void undoTurn();
     void startPersonalTraining();
+    void openGameReview();
     void createUser();
     void switchUser(int comboIndex);
     void populateUsers();

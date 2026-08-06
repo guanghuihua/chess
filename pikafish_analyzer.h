@@ -38,6 +38,12 @@ public:
     bool isAvailable() const;
     bool hasPendingAnalysis() const;
     QString enginePath() const;
+    static QString toChineseNotation(const std::string &board,
+                                     XiangqiGame::Side side,
+                                     const QString &uciMove);
+    static QString toChinesePrincipalVariation(const std::string &board,
+                                               XiangqiGame::Side side,
+                                               const QString &uciMoves);
 
 signals:
     void analysisReady(const PikafishAnalyzer::AnalysisResult &result);
@@ -86,12 +92,6 @@ private:
     static QString findProjectRoot();
     static QString toFen(const std::string &board, XiangqiGame::Side side, int ply);
     static QString toUciMove(const XiangqiGame::MoveRecord &move);
-    static QString toChineseNotation(const std::string &board,
-                                     XiangqiGame::Side side,
-                                     const QString &uciMove);
-    static QString toChinesePrincipalVariation(const std::string &board,
-                                               XiangqiGame::Side side,
-                                               const QString &uciMoves);
     static QString categoryForLoss(int loss);
     static QString explanationFor(const AnalysisResult &result);
     static int calculateScoreLoss(const AnalysisResult &result);

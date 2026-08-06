@@ -35,6 +35,8 @@ set(PROJECT_SOURCES
         training_dialog.h
         profile_dashboard_widget.cpp
         profile_dashboard_widget.h
+        game_review_dialog.cpp
+        game_review_dialog.h
 )
 
 if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
@@ -128,6 +130,10 @@ add_executable(training_ui_smoke_test
     xiangqi_game.h
     game_database.cpp
     game_database.h
+    game_review_dialog.cpp
+    game_review_dialog.h
+    pikafish_analyzer.cpp
+    pikafish_analyzer.h
 )
 target_link_libraries(training_ui_smoke_test PRIVATE
     Qt${QT_VERSION_MAJOR}::Widgets

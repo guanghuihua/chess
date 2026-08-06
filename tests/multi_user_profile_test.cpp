@@ -130,6 +130,15 @@ int main(int argc, char *argv[])
                              "resignation", &error)) {
         return 13;
     }
+    const auto completed = database.completedGames(alice, 20);
+    const auto recorded = database.recordedMoves(trainingGame);
+    const auto bobCompleted = database.completedGames(bob, 20);
+    if (completed.isEmpty() || completed.front().id != trainingGame
+        || recorded.size() != 1 || recorded.front().actualMove != "a3a4"
+        || !recorded.front().hasAnalysis || recorded.front().bestMove != "b2b3"
+        || (!bobCompleted.isEmpty() && bobCompleted.front().id == trainingGame)) {
+        return 13;
+    }
     GameDatabase::GameReviewContext context;
     if (!database.buildGameReviewContext(trainingGame, &context, &error)
         || context.userId != alice || context.endReason != "resignation"

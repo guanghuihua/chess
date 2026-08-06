@@ -119,6 +119,7 @@ void XiangqiBoardWidget::newGame()
     game_ = XiangqiGame();
     training_mode_ = false;
     training_locked_ = false;
+    review_move_.reset();
     turn_timer_.restart();
     if (opponent_enabled_) {
         startEngine();
@@ -150,10 +151,34 @@ bool XiangqiBoardWidget::loadTrainingPosition(const std::string &board)
     selected_.reset();
     training_mode_ = true;
     training_locked_ = false;
+    review_move_.reset();
     if (!game_.loadPosition(board, XiangqiGame::Side::Red)) {
         return false;
     }
     turn_timer_.restart();
+    update();
+    return true;
+}
+
+bool XiangqiBoardWidget::loadReviewPosition(const std::string &board,
+                                            XiangqiGame::Side sideToMove,
+                                            int fromRow, int fromCol,
+                                            int toRow, int toCol)
+{
+    engine_timeout_.stop();
+    engine_busy_ = false;
+    selected_.reset();
+    training_mode_ = true;
+    training_locked_ = true;
+    if (!game_.loadPosition(board, sideToMove)) {
+        return false;
+    }
+    if (XiangqiGame::inBounds(fromRow, fromCol)
+        && XiangqiGame::inBounds(toRow, toCol)) {
+        review_move_ = std::array<int, 4>{fromRow, fromCol, toRow, toCol};
+    } else {
+        review_move_.reset();
+    }
     update();
     return true;
 }
@@ -378,13 +403,16 @@ void XiangqiBoardWidget::drawPieces(QPainter &painter)
 void XiangqiBoardWidget::drawLastMove(QPainter &painter)
 {
     const auto &history = game_.moveHistory();
-    if (history.empty()) {
+    if (history.empty() && !review_move_.has_value()) {
         return;
     }
 
-    const XiangqiGame::MoveRecord &move = history.back();
-    const QPointF from = intersectionPoint(move.fromRow, move.fromCol);
-    const QPointF to = intersectionPoint(move.toRow, move.toCol);
+    const int fromRow = review_move_.has_value() ? (*review_move_)[0] : history.back().fromRow;
+    const int fromCol = review_move_.has_value() ? (*review_move_)[1] : history.back().fromCol;
+    const int toRow = review_move_.has_value() ? (*review_move_)[2] : history.back().toRow;
+    const int toCol = review_move_.has_value() ? (*review_move_)[3] : history.back().toCol;
+    const QPointF from = intersectionPoint(fromRow, fromCol);
+    const QPointF to = intersectionPoint(toRow, toCol);
     const double cell = cellSize();
     const double markerRadius = cell * 0.43;
 

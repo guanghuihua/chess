@@ -4,6 +4,7 @@
 
 #include "game_database.h"
 #include "training_dialog.h"
+#include "game_review_dialog.h"
 #include "xiangqi_game.h"
 
 int main(int argc, char *argv[])
@@ -39,5 +40,8 @@ int main(int argc, char *argv[])
     TrainingDialog dialog(&database, 1);
     QTimer::singleShot(250, &dialog, &QDialog::accept);
     dialog.exec();
+    GameReviewDialog reviewDialog(&database, 1);
+    QTimer::singleShot(250, &reviewDialog, &QDialog::accept);
+    reviewDialog.exec();
     return 0;
 }

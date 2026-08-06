@@ -110,6 +110,44 @@ public:
         int blunders = 0;
     };
 
+    struct GameSummary
+    {
+        qint64 id = -1;
+        QString startedAt;
+        QString finishedAt;
+        QString result;
+        QString endReason;
+        int moveCount = 0;
+        bool hasReview = false;
+    };
+
+    struct RecordedMove
+    {
+        int ply = 0;
+        QString side;
+        int fromRow = 0;
+        int fromCol = 0;
+        int toRow = 0;
+        int toCol = 0;
+        QString movedPiece;
+        QString capturedPiece;
+        qint64 thinkingTimeMs = 0;
+        QString boardBefore;
+        QString boardAfter;
+        QString actualMove;
+        QString bestMove;
+        int bestScore = 0;
+        int actualScore = 0;
+        int scoreLoss = 0;
+        QString category;
+        QString principalVariation;
+        QString diagnosis;
+        QString evidence;
+        QString trainingTask;
+        QString reflectionQuestion;
+        bool hasAnalysis = false;
+    };
+
     struct GameReviewContext
     {
         qint64 gameId = -1;
@@ -194,6 +232,8 @@ public:
     QVector<ProfileReport> profileReports(qint64 userId) const;
     QVector<GamePerformance> recentGamePerformance(qint64 userId,
                                                    int limit = 10) const;
+    QVector<GameSummary> completedGames(qint64 userId, int limit = 100) const;
+    QVector<RecordedMove> recordedMoves(qint64 gameId) const;
     QString databasePath() const;
 
 private:

@@ -40,6 +40,9 @@ public:
     bool resign(XiangqiGame::Side side);
     int undoTurn();
     bool loadTrainingPosition(const std::string &board);
+    bool loadReviewPosition(const std::string &board, XiangqiGame::Side sideToMove,
+                            int fromRow = -1, int fromCol = -1,
+                            int toRow = -1, int toCol = -1);
     void setDifficulty(Difficulty difficulty);
     Difficulty difficulty() const;
 
@@ -72,6 +75,7 @@ private:
     bool opponent_enabled_ = true;
     bool training_mode_ = false;
     bool training_locked_ = false;
+    std::optional<std::array<int, 4>> review_move_;
     Difficulty difficulty_ = Difficulty::Elementary;
 
     QRectF boardRect() const;
