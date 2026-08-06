@@ -295,18 +295,21 @@ QByteArray DeepSeekCoach::makeGameReviewRequestBody(
         u8"总手数：%4，红方走法：%5，已分析红方走法：%6\n"
         u8"本局平均损失：%7，明显失误：%8，严重失误：%9，红方平均思考：%10 秒\n\n"
         u8"各阶段表现：\n%11\n\n关键转折点（最多五个）：\n%12\n\n"
-        u8"完整着法记录：\n%13\n\n"
-        u8"长期个人统计：完成对局 %14，分析走法 %15，平均损失 %16，"
-        u8"轻微失误 %17，明显失误 %18，严重失误 %19。")
+        u8"本局悔棋证据：\n%13\n\n完整着法记录：\n%14\n\n"
+        u8"长期个人统计：完成对局 %15，分析走法 %16，平均损失 %17，"
+        u8"轻微失误 %18，明显失误 %19，严重失误 %20；累计悔棋 %21 次，"
+        u8"其中已确认的明显/严重失误 %22 次。")
         .arg(context.gameId).arg(context.result).arg(context.endReason)
         .arg(context.totalMoves).arg(context.redMoves).arg(context.analyzedMoves)
         .arg(context.averageLoss, 0, 'f', 1)
         .arg(context.mistakes).arg(context.blunders)
         .arg(context.averageThinkingTimeMs / 1000.0, 0, 'f', 1)
-        .arg(context.phaseSummary, context.keyMoments, context.moveTranscript)
+        .arg(context.phaseSummary, context.keyMoments, context.undoSummary,
+             context.moveTranscript)
         .arg(stats.games).arg(stats.analyzedMoves)
         .arg(stats.averageLoss, 0, 'f', 1)
-        .arg(stats.inaccuracies).arg(stats.mistakes).arg(stats.blunders);
+        .arg(stats.inaccuracies).arg(stats.mistakes).arg(stats.blunders)
+        .arg(stats.undoEvents).arg(stats.blunderUndoEvents);
 
     QJsonObject body;
     body["model"] = QString::fromLatin1(modelName);

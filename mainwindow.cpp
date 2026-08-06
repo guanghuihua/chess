@@ -543,6 +543,17 @@ void MainWindow::undoTurn()
 
     QString error;
     const int lastKeptPly = static_cast<int>(board_widget_->game().moveHistory().size());
+    bool evidenceSaved = true;
+    if (current_game_id_ >= 0) {
+        evidenceSaved = database_.recordUndoEvent(current_game_id_, lastKeptPly,
+                                                   undone, &error);
+        if (!evidenceSaved) {
+            QMessageBox::warning(
+                this, QString::fromUtf8(u8"悔棋学习记录错误"),
+                QString::fromUtf8(u8"棋盘已经退回，但无法保存本次悔棋证据：") + error);
+        }
+        error.clear();
+    }
     if (current_game_id_ >= 0 &&
         !database_.truncateGame(current_game_id_, lastKeptPly, &error)) {
         QMessageBox::warning(this,
@@ -552,8 +563,11 @@ void MainWindow::undoTurn()
 
     analysis_browser_->clear();
     analysis_browser_->append(QString::fromUtf8(
-        u8"<p style='color:#555'>已悔棋，撤销 %1 步。后续分析将以当前局面为准。</p>")
-        .arg(undone));
+        u8"<p style='color:#555'>已悔棋，撤销 %1 步。%2后续分析将以当前局面为准。</p>")
+        .arg(undone)
+        .arg(evidenceSaved
+                 ? QString::fromUtf8(u8"原着已作为个人学习证据保存；")
+                 : QString::fromUtf8(u8"本次学习证据保存失败；")));
     refreshStats();
 }
 

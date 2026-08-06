@@ -27,7 +27,28 @@ public:
         int inaccuracies = 0;
         int mistakes = 0;
         int blunders = 0;
+        int undoEvents = 0;
+        int analyzedUndoEvents = 0;
+        int blunderUndoEvents = 0;
         double averageLoss = 0.0;
+    };
+
+    struct UndoEvent
+    {
+        qint64 id = -1;
+        qint64 gameId = -1;
+        qint64 userId = -1;
+        int lastKeptPly = 0;
+        int undonePlies = 0;
+        int redMovePly = 0;
+        QString actualMove;
+        QString boardBefore;
+        QString bestMove;
+        int scoreLoss = 0;
+        QString category;
+        QString principalVariation;
+        bool hadAnalysis = false;
+        QString requestedAt;
     };
 
     struct TrainingPosition
@@ -67,6 +88,8 @@ public:
         int blunders = 0;
         int trainingAttempts = 0;
         int trainingCorrect = 0;
+        int undoEvents = 0;
+        int blunderUndoEvents = 0;
         QString mainWeakness;
     };
 
@@ -103,6 +126,7 @@ public:
         QString moveTranscript;
         QString phaseSummary;
         QString keyMoments;
+        QString undoSummary;
     };
 
     struct GameReview
@@ -137,6 +161,9 @@ public:
                     QString *errorMessage = nullptr);
     bool truncateGame(qint64 gameId, int lastKeptPly,
                       QString *errorMessage = nullptr);
+    bool recordUndoEvent(qint64 gameId, int lastKeptPly, int undonePlies,
+                         QString *errorMessage = nullptr);
+    QVector<UndoEvent> undoEvents(qint64 userId, int limit = 50) const;
     bool recordAnalysis(qint64 gameId, int ply, const QString &actualMove,
                         const QString &bestMove, int bestScore, int actualScore,
                         int scoreLoss, const QString &category,

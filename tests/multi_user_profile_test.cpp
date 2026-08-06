@@ -101,7 +101,17 @@ int main(int argc, char *argv[])
     if (trainingGame < 0 || !database.recordMove(trainingGame, move, &error) ||
         !database.recordAnalysis(trainingGame, 1, "a3a4", "b2b3",
                                  120, 0, 120, "mistake", "b2b3", &error) ||
+        !database.recordUndoEvent(trainingGame, 0, 1, &error) ||
         database.generateTrainingPositions(alice, &error) < 0) {
+        return 10;
+    }
+    const auto undoEvidence = database.undoEvents(alice, 5);
+    if (undoEvidence.size() != 1 || undoEvidence.front().gameId != trainingGame
+        || undoEvidence.front().actualMove != "a3a4"
+        || undoEvidence.front().bestMove != "b2b3"
+        || undoEvidence.front().scoreLoss != 120
+        || !undoEvidence.front().hadAnalysis
+        || !database.undoEvents(bob, 5).isEmpty()) {
         return 10;
     }
     const auto aliceTraining = database.dueTrainingPositions(alice, 5);
@@ -126,7 +136,7 @@ int main(int argc, char *argv[])
         || context.totalMoves != 1
         || context.redMoves != 1 || context.analyzedMoves != 1
         || !context.moveTranscript.contains("a3a4")
-        || context.keyMoments.isEmpty()) {
+        || context.keyMoments.isEmpty() || !context.undoSummary.contains("a3a4")) {
         return 14;
     }
     GameDatabase::GameReview review;
@@ -145,7 +155,10 @@ int main(int argc, char *argv[])
     }
     if (!database.truncateGame(trainingGame, 0, &error)
         || database.hasGameReview(trainingGame)
-        || database.buildGameReviewContext(trainingGame, &context)) {
+        || database.buildGameReviewContext(trainingGame, &context)
+        || database.undoEvents(alice, 5).size() != 1
+        || database.trainingStats(alice).undoEvents != 1
+        || database.trainingStats(alice).blunderUndoEvents != 1) {
         return 16;
     }
     return 0;

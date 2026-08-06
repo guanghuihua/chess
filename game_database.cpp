@@ -95,6 +95,15 @@ bool GameDatabase::executeSchema(QString *errorMessage)
         "training_plan TEXT NOT NULL, reflection_question TEXT NOT NULL, "
         "created_at TEXT NOT NULL, FOREIGN KEY(game_id) REFERENCES games(id))",
 
+        "CREATE TABLE IF NOT EXISTS undo_events ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, game_id INTEGER NOT NULL, "
+        "user_id INTEGER NOT NULL, last_kept_ply INTEGER NOT NULL, "
+        "undone_plies INTEGER NOT NULL, red_move_ply INTEGER NOT NULL, "
+        "actual_move TEXT NOT NULL, board_before TEXT NOT NULL, "
+        "best_move TEXT, score_loss INTEGER, category TEXT, principal_variation TEXT, "
+        "had_analysis INTEGER NOT NULL DEFAULT 0, requested_at TEXT NOT NULL, "
+        "FOREIGN KEY(game_id) REFERENCES games(id), FOREIGN KEY(user_id) REFERENCES users(id))",
+
         "CREATE TABLE IF NOT EXISTS training_positions ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT, source_game_id INTEGER NOT NULL, "
         "source_ply INTEGER NOT NULL, board TEXT NOT NULL, best_move TEXT NOT NULL, "
@@ -117,6 +126,8 @@ bool GameDatabase::executeSchema(QString *errorMessage)
         "CREATE INDEX IF NOT EXISTS idx_moves_game ON moves(game_id, ply)",
         "CREATE INDEX IF NOT EXISTS idx_analyses_game ON analyses(game_id, ply)",
         "CREATE INDEX IF NOT EXISTS idx_game_reviews_game ON game_reviews(game_id)",
+        "CREATE INDEX IF NOT EXISTS idx_undo_events_user ON undo_events(user_id, requested_at)",
+        "CREATE INDEX IF NOT EXISTS idx_undo_events_game ON undo_events(game_id)",
         "CREATE INDEX IF NOT EXISTS idx_training_due ON training_positions(next_review_at, mastery)",
         "CREATE INDEX IF NOT EXISTS idx_training_attempts_position "
         "ON training_attempts(training_position_id)",
@@ -338,6 +349,34 @@ bool GameDatabase::buildGameReviewContext(qint64 gameId,
     built.keyMoments = keyMoments.isEmpty()
         ? QString::fromUtf8(u8"没有局面损失超过 30 的关键失误。")
         : keyMoments.join('\n');
+
+    QSqlQuery undos(database_);
+    undos.prepare(
+        "SELECT red_move_ply, actual_move, COALESCE(best_move,''), "
+        "COALESCE(score_loss,0), COALESCE(category,''), had_analysis "
+        "FROM undo_events WHERE game_id=? ORDER BY id");
+    undos.addBindValue(gameId);
+    if (!undos.exec()) {
+        if (errorMessage) *errorMessage = undos.lastError().text();
+        return false;
+    }
+    QStringList undoEvidence;
+    while (undos.next()) {
+        if (undos.value(5).toBool()) {
+            undoEvidence.push_back(QString::fromUtf8(
+                u8"第 %1 步后主动悔棋：原着 %2，引擎推荐 %3，损失 %4，等级 %5")
+                .arg(undos.value(0).toInt())
+                .arg(undos.value(1).toString(), undos.value(2).toString())
+                .arg(undos.value(3).toInt())
+                .arg(undos.value(4).toString()));
+        } else {
+            undoEvidence.push_back(QString::fromUtf8(
+                u8"第 %1 步后主动悔棋：原着 %2（悔棋时引擎分析尚未完成）")
+                .arg(undos.value(0).toInt()).arg(undos.value(1).toString()));
+        }
+    }
+    built.undoSummary = undoEvidence.isEmpty()
+        ? QString::fromUtf8(u8"本局没有悔棋记录。") : undoEvidence.join('\n');
     *context = built;
     return true;
 }
@@ -774,6 +813,83 @@ bool GameDatabase::truncateGame(qint64 gameId, int lastKeptPly,
     return true;
 }
 
+bool GameDatabase::recordUndoEvent(qint64 gameId, int lastKeptPly, int undonePlies,
+                                   QString *errorMessage)
+{
+    QSqlQuery source(database_);
+    source.prepare(
+        "SELECT g.user_id, m.ply, m.from_row, m.from_col, m.to_row, m.to_col, "
+        "m.board_before, a.best_move, a.score_loss, a.category, a.principal_variation, "
+        "CASE WHEN a.id IS NULL THEN 0 ELSE 1 END "
+        "FROM games g JOIN moves m ON m.game_id=g.id "
+        "LEFT JOIN analyses a ON a.game_id=m.game_id AND a.ply=m.ply "
+        "WHERE g.id=? AND m.side='red' AND m.ply>? "
+        "ORDER BY m.ply DESC LIMIT 1");
+    source.addBindValue(gameId);
+    source.addBindValue(lastKeptPly);
+    if (!source.exec() || !source.next()) {
+        if (errorMessage) {
+            *errorMessage = source.lastError().isValid()
+                ? source.lastError().text()
+                : QString::fromUtf8(u8"没有找到本次悔棋对应的用户着法");
+        }
+        return false;
+    }
+
+    auto square = [](int row, int col) {
+        return QString(QChar('a' + col)) + QChar('9' - row);
+    };
+    const QString actualMove = square(source.value(2).toInt(), source.value(3).toInt())
+                               + square(source.value(4).toInt(), source.value(5).toInt());
+    QSqlQuery insert(database_);
+    insert.prepare(
+        "INSERT INTO undo_events(game_id, user_id, last_kept_ply, undone_plies, "
+        "red_move_ply, actual_move, board_before, best_move, score_loss, category, "
+        "principal_variation, had_analysis, requested_at) "
+        "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    insert.addBindValue(gameId);
+    insert.addBindValue(source.value(0));
+    insert.addBindValue(lastKeptPly);
+    insert.addBindValue(std::max(1, undonePlies));
+    insert.addBindValue(source.value(1));
+    insert.addBindValue(actualMove);
+    insert.addBindValue(source.value(6));
+    insert.addBindValue(source.value(7));
+    insert.addBindValue(source.value(8));
+    insert.addBindValue(source.value(9));
+    insert.addBindValue(source.value(10));
+    insert.addBindValue(source.value(11));
+    insert.addBindValue(QDateTime::currentDateTime().toString(Qt::ISODateWithMs));
+    if (!insert.exec()) {
+        if (errorMessage) *errorMessage = insert.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+QVector<GameDatabase::UndoEvent> GameDatabase::undoEvents(qint64 userId, int limit) const
+{
+    QVector<UndoEvent> events;
+    QSqlQuery query(database_);
+    query.prepare(
+        "SELECT id, game_id, user_id, last_kept_ply, undone_plies, red_move_ply, "
+        "actual_move, board_before, COALESCE(best_move,''), COALESCE(score_loss,0), "
+        "COALESCE(category,''), COALESCE(principal_variation,''), had_analysis, requested_at "
+        "FROM undo_events WHERE user_id=? ORDER BY id DESC LIMIT ?");
+    query.addBindValue(userId);
+    query.addBindValue(std::max(1, limit));
+    if (!query.exec()) return events;
+    while (query.next()) {
+        events.push_back(UndoEvent{
+            query.value(0).toLongLong(), query.value(1).toLongLong(),
+            query.value(2).toLongLong(), query.value(3).toInt(), query.value(4).toInt(),
+            query.value(5).toInt(), query.value(6).toString(), query.value(7).toString(),
+            query.value(8).toString(), query.value(9).toInt(), query.value(10).toString(),
+            query.value(11).toString(), query.value(12).toBool(), query.value(13).toString()});
+    }
+    return events;
+}
+
 bool GameDatabase::recordAnalysis(qint64 gameId, int ply, const QString &actualMove,
                                   const QString &bestMove, int bestScore, int actualScore,
                                   int scoreLoss, const QString &category,
@@ -841,6 +957,17 @@ GameDatabase::TrainingStats GameDatabase::trainingStats(qint64 userId) const
     if (coachingQuery.exec() && coachingQuery.next()) {
         stats.coachedMoves = coachingQuery.value(0).toInt();
     }
+    QSqlQuery undoQuery(database_);
+    undoQuery.prepare(
+        "SELECT COUNT(*), COALESCE(SUM(had_analysis),0), "
+        "COALESCE(SUM(CASE WHEN category IN ('mistake','blunder') THEN 1 ELSE 0 END),0) "
+        "FROM undo_events WHERE user_id=?");
+    undoQuery.addBindValue(userId);
+    if (undoQuery.exec() && undoQuery.next()) {
+        stats.undoEvents = undoQuery.value(0).toInt();
+        stats.analyzedUndoEvents = undoQuery.value(1).toInt();
+        stats.blunderUndoEvents = undoQuery.value(2).toInt();
+    }
     return stats;
 }
 
@@ -886,7 +1013,13 @@ GameDatabase::UserProfile GameDatabase::userProfile(qint64 userId) const
     const TrainingSummary training = trainingSummary(userId);
     profile.trainingAttempts = training.attempts;
     profile.trainingCorrect = training.correctAttempts;
-    if (profile.blunders > 0) {
+    const TrainingStats stats = trainingStats(userId);
+    profile.undoEvents = stats.undoEvents;
+    profile.blunderUndoEvents = stats.blunderUndoEvents;
+    if (profile.blunderUndoEvents > 0) {
+        profile.mainWeakness = QString::fromUtf8(
+            u8"重点复查曾经悔掉的失误着法：悔棋说明你已经察觉问题，下一步要把这种察觉提前到落子之前");
+    } else if (profile.blunders > 0) {
         profile.mainWeakness = QString::fromUtf8(u8"减少严重失误，落子前检查对方的将军、吃子和直接威胁");
     } else if (mistakes > inaccuracies) {
         profile.mainWeakness = QString::fromUtf8(u8"加强候选着比较，至少计算两个可选方案");
