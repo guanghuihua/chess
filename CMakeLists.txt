@@ -31,6 +31,8 @@ set(PROJECT_SOURCES
         deepseek_coach.h
         credential_store.cpp
         credential_store.h
+        json_object_extractor.cpp
+        json_object_extractor.h
         training_dialog.cpp
         training_dialog.h
         profile_dashboard_widget.cpp
@@ -155,3 +157,12 @@ target_link_libraries(multi_user_profile_test PRIVATE
 )
 target_include_directories(multi_user_profile_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME multi_user_profile_test COMMAND multi_user_profile_test)
+
+add_executable(json_response_test
+    tests/json_response_test.cpp
+    json_object_extractor.cpp
+    json_object_extractor.h
+)
+target_link_libraries(json_response_test PRIVATE Qt${QT_VERSION_MAJOR}::Core)
+target_include_directories(json_response_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME json_response_test COMMAND json_response_test)

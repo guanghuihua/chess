@@ -52,6 +52,7 @@ XiangqiBoardWidget::XiangqiBoardWidget(QWidget *parent, bool opponentEnabled)
     , opponent_enabled_(opponentEnabled)
 {
     setMinimumSize(540, 610);
+    setMouseTracking(true);
     turn_timer_.start();
 
     engine_timeout_.setSingleShot(true);
@@ -230,10 +231,31 @@ void XiangqiBoardWidget::paintEvent(QPaintEvent *event)
 
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.fillRect(rect(), QColor(239, 234, 222));
     drawBoard(painter);
     drawLastMove(painter);
+    drawMoveHints(painter);
     drawPieces(painter);
     drawSelection(painter);
+}
+
+void XiangqiBoardWidget::mouseMoveEvent(QMouseEvent *event)
+{
+    const auto cell = hitTest(event->pos());
+    if ((!cell.has_value() && hovered_.has_value())
+        || (cell.has_value() && (!hovered_.has_value()
+            || cell->row != hovered_->row || cell->col != hovered_->col))) {
+        hovered_ = cell;
+        update();
+    }
+    QWidget::mouseMoveEvent(event);
+}
+
+void XiangqiBoardWidget::leaveEvent(QEvent *event)
+{
+    hovered_.reset();
+    update();
+    QWidget::leaveEvent(event);
 }
 
 void XiangqiBoardWidget::mousePressEvent(QMouseEvent *event)
@@ -329,11 +351,25 @@ std::optional<XiangqiBoardWidget::Cell> XiangqiBoardWidget::hitTest(const QPoint
 void XiangqiBoardWidget::drawBoard(QPainter &painter)
 {
     const QRectF rect = boardRect();
+    const double cell = cellSize();
 
     painter.save();
-    painter.setPen(QPen(QColor(120, 70, 30), 2));
-    painter.setBrush(QColor(245, 228, 196));
+    const QRectF woodRect = rect.adjusted(-cell * 0.42, -cell * 0.42,
+                                          cell * 0.42, cell * 0.42);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(62, 43, 27, 45));
+    painter.drawRoundedRect(woodRect.translated(0, cell * 0.08), 12, 12);
+    QLinearGradient wood(woodRect.topLeft(), woodRect.bottomRight());
+    wood.setColorAt(0.0, QColor(248, 226, 178));
+    wood.setColorAt(0.48, QColor(235, 198, 132));
+    wood.setColorAt(1.0, QColor(222, 178, 105));
+    painter.setBrush(wood);
+    painter.setPen(QPen(QColor(91, 54, 27), std::max(2.0, cell * 0.045)));
+    painter.drawRoundedRect(woodRect, 10, 10);
+    painter.setBrush(Qt::NoBrush);
+    painter.setPen(QPen(QColor(112, 67, 31), std::max(1.2, cell * 0.027)));
     painter.drawRect(rect);
+    painter.setPen(QPen(QColor(103, 60, 29), std::max(1.0, cell * 0.022)));
 
     for (int row = 0; row < 10; ++row) {
         painter.drawLine(intersectionPoint(row, 0), intersectionPoint(row, 8));
@@ -352,13 +388,34 @@ void XiangqiBoardWidget::drawBoard(QPainter &painter)
     painter.drawLine(intersectionPoint(7, 3), intersectionPoint(9, 5));
     painter.drawLine(intersectionPoint(7, 5), intersectionPoint(9, 3));
 
+    auto drawMarker = [&](int row, int col) {
+        const QPointF p = intersectionPoint(row, col);
+        const double arm = cell * 0.14;
+        const double gap = cell * 0.055;
+        painter.setPen(QPen(QColor(105, 61, 29), std::max(1.0, cell * 0.018)));
+        auto corner = [&](double sx, double sy) {
+            painter.drawLine(QPointF(p.x() + sx * gap, p.y() + sy * gap),
+                             QPointF(p.x() + sx * arm, p.y() + sy * gap));
+            painter.drawLine(QPointF(p.x() + sx * gap, p.y() + sy * gap),
+                             QPointF(p.x() + sx * gap, p.y() + sy * arm));
+        };
+        if (col > 0) { corner(-1, -1); corner(-1, 1); }
+        if (col < 8) { corner(1, -1); corner(1, 1); }
+    };
+    for (const auto &point : {QPair<int,int>{2,1}, {2,7}, {7,1}, {7,7},
+                              {3,0}, {3,2}, {3,4}, {3,6}, {3,8},
+                              {6,0}, {6,2}, {6,4}, {6,6}, {6,8}}) {
+        drawMarker(point.first, point.second);
+    }
+
     QFont riverFont = painter.font();
-    riverFont.setPointSizeF(cellSize() * 0.25);
+    riverFont.setFamily(QString::fromUtf8(u8"KaiTi"));
+    riverFont.setPointSizeF(cell * 0.28);
     riverFont.setBold(true);
     painter.setFont(riverFont);
     painter.drawText(QRectF(rect.left(), intersectionPoint(4, 0).y(), rect.width(), cellSize()),
                      Qt::AlignCenter,
-                     QString::fromUtf8(u8"\u695a \u6cb3        \u6c49 \u754c"));
+                     QString::fromUtf8(u8"楚 河             汉 界"));
     painter.restore();
 }
 
@@ -384,14 +441,28 @@ void XiangqiBoardWidget::drawPieces(QPainter &painter)
                                      : QColor(25, 25, 25);
 
             painter.save();
-            painter.setPen(QPen(color, 2));
-            painter.setBrush(QColor(252, 246, 232));
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(QColor(48, 31, 20, 55));
+            painter.drawEllipse(pieceRect.translated(0, cell * 0.045));
+            QRadialGradient face(pieceRect.center() - QPointF(cell * 0.1, cell * 0.1),
+                                 diameter * 0.62);
+            face.setColorAt(0.0, QColor(255, 252, 238));
+            face.setColorAt(0.72, QColor(246, 229, 192));
+            face.setColorAt(1.0, QColor(218, 183, 126));
+            painter.setPen(QPen(color, std::max(1.8, cell * 0.035)));
+            painter.setBrush(face);
             painter.drawEllipse(pieceRect);
+            painter.setPen(QPen(color.lighter(120), std::max(0.8, cell * 0.014)));
+            painter.setBrush(Qt::NoBrush);
+            painter.drawEllipse(pieceRect.adjusted(cell * 0.07, cell * 0.07,
+                                                   -cell * 0.07, -cell * 0.07));
 
             QFont font = painter.font();
-            font.setFamily("Microsoft YaHei");
+            font.setFamilies({QString::fromUtf8(u8"KaiTi"),
+                              QString::fromUtf8(u8"STKaiti"),
+                              QString::fromUtf8(u8"Microsoft YaHei")});
             font.setBold(true);
-            font.setPointSizeF(cell * 0.36);
+            font.setPointSizeF(cell * 0.38);
             painter.setFont(font);
             painter.setPen(color);
             painter.drawText(pieceRect, Qt::AlignCenter, pieceLabel(*piece));
@@ -414,13 +485,17 @@ void XiangqiBoardWidget::drawLastMove(QPainter &painter)
     const QPointF from = intersectionPoint(fromRow, fromCol);
     const QPointF to = intersectionPoint(toRow, toCol);
     const double cell = cellSize();
-    const double markerRadius = cell * 0.43;
+    const double markerRadius = cell * 0.40;
 
     painter.save();
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(QColor(255, 196, 0, 65));
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(QPen(QColor(176, 107, 24, 220),
+                        std::max(3.0, cell * 0.060), Qt::SolidLine, Qt::RoundCap));
+    painter.setBrush(QColor(225, 158, 48, 38));
     painter.drawEllipse(from, markerRadius, markerRadius);
-    painter.setBrush(QColor(40, 150, 75, 75));
+    painter.setPen(QPen(QColor(25, 112, 78, 230),
+                        std::max(3.2, cell * 0.065), Qt::SolidLine, Qt::RoundCap));
+    painter.setBrush(QColor(42, 137, 93, 42));
     painter.drawEllipse(to, markerRadius, markerRadius);
 
     QLineF direction(from, to);
@@ -430,38 +505,66 @@ void XiangqiBoardWidget::drawLastMove(QPainter &painter)
         const QPointF lineStart = from + unit * (cell * 0.18);
         const QPointF lineEnd = to - unit * (cell * 0.22);
 
-        painter.setPen(QPen(QColor(45, 125, 210, 180),
-                            std::max(2.0, cell * 0.055),
+        painter.setPen(QPen(QColor(24, 103, 82, 225),
+                            std::max(4.0, cell * 0.070),
                             Qt::SolidLine, Qt::RoundCap));
         painter.drawLine(lineStart, lineEnd);
 
-        const double arrowLength = cell * 0.18;
-        const double arrowWidth = cell * 0.11;
+        const double arrowLength = cell * 0.25;
+        const double arrowWidth = cell * 0.16;
         const QPolygonF arrow{
             lineEnd,
             lineEnd - unit * arrowLength + normal * arrowWidth,
             lineEnd - unit * arrowLength - normal * arrowWidth
         };
         painter.setPen(Qt::NoPen);
-        painter.setBrush(QColor(45, 125, 210, 210));
+        painter.setBrush(QColor(24, 103, 82, 235));
         painter.drawPolygon(arrow);
     }
 
     painter.restore();
 }
 
+void XiangqiBoardWidget::drawMoveHints(QPainter &painter)
+{
+    if (!selected_.has_value() || training_locked_ || engine_busy_) return;
+    const double cell = cellSize();
+    painter.save();
+    for (int row = 0; row < 10; ++row) {
+        for (int col = 0; col < 9; ++col) {
+            if (!game_.isLegalMove(selected_->row, selected_->col, row, col)) continue;
+            const QPointF center = intersectionPoint(row, col);
+            if (game_.at(row, col).has_value()) {
+                painter.setPen(QPen(QColor(163, 64, 46, 175),
+                                    std::max(2.0, cell * 0.045)));
+                painter.setBrush(Qt::NoBrush);
+                painter.drawEllipse(center, cell * 0.39, cell * 0.39);
+            } else {
+                painter.setPen(Qt::NoPen);
+                painter.setBrush(QColor(43, 116, 78, 155));
+                painter.drawEllipse(center, cell * 0.085, cell * 0.085);
+            }
+        }
+    }
+    painter.restore();
+}
+
 void XiangqiBoardWidget::drawSelection(QPainter &painter)
 {
-    if (!selected_.has_value()) {
-        return;
-    }
-
-    const QPointF center = intersectionPoint(selected_->row, selected_->col);
-    const double radius = cellSize() * 0.44;
     painter.save();
-    painter.setPen(QPen(QColor(40, 160, 70), 4));
-    painter.setBrush(Qt::NoBrush);
-    painter.drawEllipse(center, radius, radius);
+    if (hovered_.has_value() && !training_locked_) {
+        const QPointF hoverCenter = intersectionPoint(hovered_->row, hovered_->col);
+        painter.setPen(QPen(QColor(83, 67, 46, 80), 1.5, Qt::DashLine));
+        painter.setBrush(QColor(255, 255, 255, 24));
+        painter.drawEllipse(hoverCenter, cellSize() * 0.43, cellSize() * 0.43);
+    }
+    if (selected_.has_value()) {
+        const QPointF center = intersectionPoint(selected_->row, selected_->col);
+        const double radius = cellSize() * 0.44;
+        painter.setPen(QPen(QColor(31, 126, 75), std::max(2.5, cellSize() * 0.055)));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawEllipse(center, radius, radius);
+    }
     painter.restore();
 }
 

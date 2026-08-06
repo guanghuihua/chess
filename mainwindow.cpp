@@ -6,9 +6,11 @@
 #include "profile_dashboard_widget.h"
 #include "game_review_dialog.h"
 
+#include <algorithm>
 #include <QFont>
 #include <QComboBox>
 #include <QDialog>
+#include <QDialogButtonBox>
 #include <QFrame>
 #include <QFormLayout>
 #include <QHBoxLayout>
@@ -18,12 +20,17 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QSignalBlocker>
 #include <QSplitter>
 #include <QTabWidget>
 #include <QTextBrowser>
+#include <QTimer>
+#include <QStyle>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <QUuid>
+#include <QUrl>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -139,21 +146,62 @@ MainWindow::MainWindow(QWidget *parent)
     coachHint->setWordWrap(true);
     coachHint->setObjectName("coachHint");
     coachLayout->addWidget(coachHint);
-    ai_advice_browser_ = new QTextBrowser(coachTab);
-    ai_advice_browser_->setObjectName("aiAdviceBrowser");
-    ai_advice_browser_->setPlaceholderText(QString::fromUtf8(
-        u8"出现值得学习的着法后，AI 会在这里解释原因并给出训练任务。"));
-    coachLayout->addWidget(ai_advice_browser_, 1);
-    tabs_->addTab(coachTab, QString::fromUtf8(u8"AI 教练"));
-
-    auto *analysisTab = new QWidget(tabs_);
-    auto *analysisLayout = new QVBoxLayout(analysisTab);
-    analysisLayout->setContentsMargins(0, 10, 0, 0);
-    analysis_browser_ = new QTextBrowser(analysisTab);
+    auto *insightSplitter = new QSplitter(Qt::Vertical, coachTab);
+    insightSplitter->setChildrenCollapsible(false);
+    auto *analysisPane = new QWidget(insightSplitter);
+    analysisPane->setObjectName("insightCard");
+    auto *analysisPaneLayout = new QVBoxLayout(analysisPane);
+    analysisPaneLayout->setContentsMargins(0, 0, 0, 0);
+    auto *analysisTitle = new QLabel(QString::fromUtf8(u8"Pikafish 引擎结论"), analysisPane);
+    analysisTitle->setObjectName("sectionTitle");
+    analysis_browser_ = new QTextBrowser(analysisPane);
+    analysis_browser_->setObjectName("engineAnalysisBrowser");
+    analysis_browser_->setOpenLinks(false);
     analysis_browser_->setPlaceholderText(QString::fromUtf8(
-        u8"你执红方。每走一步，系统会显示推荐走法、局面损失和训练建议。"));
-    analysisLayout->addWidget(analysis_browser_);
-    tabs_->addTab(analysisTab, QString::fromUtf8(u8"引擎分析"));
+        u8"你执红方。每走一步，这里会显示推荐走法、评分和推荐变化。"));
+    connect(analysis_browser_, &QTextBrowser::anchorClicked, this,
+            [this](const QUrl &url) {
+                if (url.scheme() != QStringLiteral("recommendation")) return;
+                bool ok = false;
+                const int ply = url.toString().section(':', 1).toInt(&ok);
+                if (ok) showEngineRecommendation(ply);
+            });
+    analysisPaneLayout->addWidget(analysisTitle);
+    analysisPaneLayout->addWidget(analysis_browser_, 1);
+
+    auto *advicePane = new QWidget(insightSplitter);
+    advicePane->setObjectName("insightCard");
+    auto *advicePaneLayout = new QVBoxLayout(advicePane);
+    advicePaneLayout->setContentsMargins(0, 0, 0, 0);
+    auto *adviceTitle = new QLabel(QString::fromUtf8(u8"AI 教练解释与对话"), advicePane);
+    adviceTitle->setObjectName("sectionTitle");
+    advice_scroll_ = new QScrollArea(advicePane);
+    advice_scroll_->setObjectName("adviceScroll");
+    advice_scroll_->setWidgetResizable(true);
+    advice_scroll_->setFrameShape(QFrame::NoFrame);
+    advice_feed_ = new QWidget(advice_scroll_);
+    advice_feed_->setObjectName("adviceFeed");
+    advice_feed_layout_ = new QVBoxLayout(advice_feed_);
+    advice_feed_layout_->setContentsMargins(5, 5, 5, 5);
+    advice_feed_layout_->setSpacing(10);
+    advice_feed_layout_->setAlignment(Qt::AlignTop);
+    advice_scroll_->setWidget(advice_feed_);
+    advicePaneLayout->addWidget(adviceTitle);
+    advicePaneLayout->addWidget(advice_scroll_, 1);
+    insightSplitter->addWidget(analysisPane);
+    insightSplitter->addWidget(advicePane);
+    insightSplitter->setSizes({190, 400});
+    coachLayout->addWidget(insightSplitter, 1);
+    auto *questionRow = new QHBoxLayout;
+    coach_question_edit_ = new QLineEdit(coachTab);
+    coach_question_edit_->setPlaceholderText(QString::fromUtf8(
+        u8"追问 AI 教练，例如：这一步为什么会丢子？我当时应该先检查什么？"));
+    coach_question_button_ = new QPushButton(QString::fromUtf8(u8"发送追问"), coachTab);
+    coach_question_button_->setObjectName("primaryButton");
+    questionRow->addWidget(coach_question_edit_, 1);
+    questionRow->addWidget(coach_question_button_);
+    coachLayout->addLayout(questionRow);
+    tabs_->addTab(coachTab, QString::fromUtf8(u8"分析与教练"));
 
     auto *statsTab = new QWidget(tabs_);
     auto *statsLayout = new QVBoxLayout(statsTab);
@@ -193,7 +241,10 @@ MainWindow::MainWindow(QWidget *parent)
     resize(1380, 860);
 
     setStyleSheet(QString::fromUtf8(R"(
-        QMainWindow, QWidget#appRoot { background: #f4f1e9; color: #26231f; }
+        QMainWindow, QWidget#appRoot {
+            background: #f4f1e9; color: #26231f;
+            font-family: "Microsoft YaHei UI", "Noto Sans CJK SC", "Segoe UI";
+        }
         QFrame#headerCard, QFrame#contentCard {
             background: #fffdf8;
             border: 1px solid #ddd5c6;
@@ -232,9 +283,39 @@ MainWindow::MainWindow(QWidget *parent)
         QTabBar::tab { padding: 8px 16px; color: #665f55; }
         QTabBar::tab:selected { color: #8f382b; font-weight: 600; }
         QTextBrowser { border: none; background: white; padding: 8px; }
-        QTextBrowser#aiAdviceBrowser {
-            font-size: 15px; line-height: 1.55; padding: 14px;
-            selection-background-color: #c9b8ea;
+        QWidget#insightCard {
+            background: #fffdf9; border: 1px solid #ddd5c6;
+            border-radius: 8px; padding: 7px;
+        }
+        QTextBrowser#engineAnalysisBrowser {
+            border: none; background: #fffdf9;
+        }
+        QScrollArea#adviceScroll, QWidget#adviceFeed { border: none; background: #f7f6f2; }
+        QFrame#coachCard {
+            background: #ffffff; border: 1px solid #d8d6d0;
+            border-radius: 7px;
+        }
+        QFrame#coachCard[tone="coach"] { border-color: #aebbc6; }
+        QFrame#coachCard[tone="review"] { border-color: #b9aa91; background: #fffdf8; }
+        QFrame#coachCard[tone="notice"] { border-color: #d8d1c5; background: #faf9f6; }
+        QFrame#coachCard[tone="error"] { border-color: #d7aaa4; background: #fff7f5; }
+        QFrame#coachCard[undone="true"] { border-color: #aaa7a0; background: #f1f1ef; }
+        QLabel#coachCardTitle { color: #26343d; font-size: 14px; font-weight: 700; }
+        QLabel#coachCardLead { color: #20272c; font-size: 14px; font-weight: 600; }
+        QLabel#coachCardStatus {
+            color: #6e6254; background: #e7e3dc; border-radius: 4px;
+            padding: 2px 6px; font-size: 11px;
+        }
+        QFrame#coachSection { background: #f6f7f7; border: none; border-radius: 5px; }
+        QLabel#coachSectionTitle { color: #596873; font-size: 11px; font-weight: 700; }
+        QLabel#coachSectionText { color: #30383d; font-size: 13px; }
+        QFrame#chatUser { background: #e9edf0; border: none; border-radius: 7px; }
+        QFrame#chatCoach { background: #ffffff; border: 1px solid #d8d6d0; border-radius: 7px; }
+        QLabel#chatRole { color: #596873; font-size: 11px; font-weight: 700; }
+        QLabel#chatText { color: #30383d; font-size: 13px; }
+        QLineEdit {
+            min-height: 34px; padding: 0 10px; border: 1px solid #cfc6b7;
+            border-radius: 7px; background: white; selection-background-color:#c9b8ea;
         }
         QSplitter::handle { background: transparent; }
     )"));
@@ -260,6 +341,8 @@ MainWindow::MainWindow(QWidget *parent)
             this, &MainWindow::handleCoaching);
     connect(coach_, &DeepSeekCoach::gameReviewReady,
             this, &MainWindow::handleGameReview);
+    connect(coach_, &DeepSeekCoach::chatReplyReady,
+            this, &MainWindow::handleChatReply);
     connect(coach_, &DeepSeekCoach::connectionTested,
             this, [this](bool success, const QString &) {
                 if (success) requestPendingGameReviews();
@@ -275,6 +358,10 @@ MainWindow::MainWindow(QWidget *parent)
             this, &MainWindow::startNewGame);
     connect(undoButton, &QPushButton::clicked,
             this, &MainWindow::undoTurn);
+    connect(coach_question_button_, &QPushButton::clicked,
+            this, &MainWindow::sendCoachQuestion);
+    connect(coach_question_edit_, &QLineEdit::returnPressed,
+            this, &MainWindow::sendCoachQuestion);
     connect(resignButton, &QPushButton::clicked,
             this, &MainWindow::resignGame);
     connect(trainingButton, &QPushButton::clicked,
@@ -301,6 +388,124 @@ MainWindow::~MainWindow()
     delete ui;
 }
 
+QFrame *MainWindow::appendAdviceCard(
+    const QString &title, const QString &lead,
+    const QStringList &sectionTitles, const QStringList &sectionTexts,
+    const QString &tone, int ply)
+{
+    if (!advice_feed_layout_) return nullptr;
+    auto *card = new QFrame(advice_feed_);
+    card->setObjectName("coachCard");
+    card->setProperty("tone", tone);
+    card->setProperty("ply", ply);
+    card->setProperty("undone", false);
+    auto *layout = new QVBoxLayout(card);
+    layout->setContentsMargins(12, 10, 12, 11);
+    layout->setSpacing(7);
+
+    auto *header = new QHBoxLayout;
+    auto *titleLabel = new QLabel(title, card);
+    titleLabel->setObjectName("coachCardTitle");
+    titleLabel->setWordWrap(true);
+    titleLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    auto *status = new QLabel(card);
+    status->setObjectName("coachCardStatus");
+    status->setText(QString::fromUtf8(u8"已撤销分支 · 分析保留"));
+    status->setVisible(false);
+    header->addWidget(titleLabel, 1);
+    header->addWidget(status, 0, Qt::AlignTop);
+    layout->addLayout(header);
+
+    if (!lead.trimmed().isEmpty()) {
+        auto *leadLabel = new QLabel(lead, card);
+        leadLabel->setObjectName("coachCardLead");
+        leadLabel->setWordWrap(true);
+        leadLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        layout->addWidget(leadLabel);
+    }
+
+    const int count = std::min(sectionTitles.size(), sectionTexts.size());
+    for (int i = 0; i < count; ++i) {
+        if (sectionTexts.at(i).trimmed().isEmpty()) continue;
+        auto *section = new QFrame(card);
+        section->setObjectName("coachSection");
+        auto *sectionLayout = new QVBoxLayout(section);
+        sectionLayout->setContentsMargins(9, 7, 9, 8);
+        sectionLayout->setSpacing(3);
+        auto *sectionTitle = new QLabel(sectionTitles.at(i), section);
+        sectionTitle->setObjectName("coachSectionTitle");
+        auto *sectionText = new QLabel(sectionTexts.at(i), section);
+        sectionText->setObjectName("coachSectionText");
+        sectionText->setWordWrap(true);
+        sectionText->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        sectionLayout->addWidget(sectionTitle);
+        sectionLayout->addWidget(sectionText);
+        layout->addWidget(section);
+    }
+    advice_feed_layout_->addWidget(card);
+    scrollAdviceToBottom();
+    return card;
+}
+
+void MainWindow::appendChatBubble(bool user, const QString &text, bool error)
+{
+    if (!advice_feed_layout_) return;
+    auto *bubble = new QFrame(advice_feed_);
+    bubble->setObjectName(user ? "chatUser" : "chatCoach");
+    if (error) bubble->setStyleSheet("background:#fff7f5;border:1px solid #d7aaa4;");
+    auto *layout = new QVBoxLayout(bubble);
+    layout->setContentsMargins(10, 8, 10, 9);
+    layout->setSpacing(3);
+    auto *role = new QLabel(user ? QString::fromUtf8(u8"你")
+                                 : (error ? QString::fromUtf8(u8"请求失败")
+                                          : QString::fromUtf8(u8"AI 教练")), bubble);
+    role->setObjectName("chatRole");
+    auto *content = new QLabel(text, bubble);
+    content->setObjectName("chatText");
+    content->setWordWrap(true);
+    content->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    layout->addWidget(role);
+    layout->addWidget(content);
+    advice_feed_layout_->addWidget(bubble, 0, user ? Qt::AlignRight : Qt::AlignLeft);
+    bubble->setMaximumWidth(430);
+    scrollAdviceToBottom();
+}
+
+void MainWindow::clearAdviceCards()
+{
+    if (!advice_feed_layout_) return;
+    while (QLayoutItem *item = advice_feed_layout_->takeAt(0)) {
+        if (QWidget *widget = item->widget()) widget->deleteLater();
+        delete item;
+    }
+}
+
+void MainWindow::markUndoneAdviceCards(int lastKeptPly)
+{
+    if (!advice_feed_) return;
+    const auto cards = advice_feed_->findChildren<QFrame *>("coachCard",
+                                                            Qt::FindDirectChildrenOnly);
+    for (QFrame *card : cards) {
+        const int ply = card->property("ply").toInt();
+        if (ply <= lastKeptPly || ply <= 0) continue;
+        card->setProperty("undone", true);
+        if (auto *status = card->findChild<QLabel *>("coachCardStatus")) {
+            status->setVisible(true);
+        }
+        card->style()->unpolish(card);
+        card->style()->polish(card);
+    }
+}
+
+void MainWindow::scrollAdviceToBottom()
+{
+    if (!advice_scroll_) return;
+    QTimer::singleShot(0, advice_scroll_, [this] {
+        if (advice_scroll_) advice_scroll_->verticalScrollBar()->setValue(
+            advice_scroll_->verticalScrollBar()->maximum());
+    });
+}
+
 void MainWindow::initializeTrainingSystem()
 {
     QString error;
@@ -316,6 +521,9 @@ void MainWindow::initializeTrainingSystem()
     if (current_game_id_ < 0) {
         QMessageBox::warning(this, QString::fromUtf8(u8"无法创建对局"), error);
     }
+    appendAdviceCard(QString::fromUtf8(u8"等待首个关键决策"),
+                     QString::fromUtf8(u8"走棋后，每个值得复盘的步骤会单独生成一张分析卡片。"),
+                     {}, {}, QStringLiteral("notice"));
     database_.generateTrainingPositions(active_user_id_);
     refreshStats();
     showMilestoneReportIfNeeded();
@@ -351,13 +559,12 @@ void MainWindow::handleGameEnded()
     }
     pending_game_reviews_.insert(current_game_id_);
     database_.generateTrainingPositions(active_user_id_);
-    if (ai_advice_browser_) {
+    if (advice_feed_layout_) {
         const QString progress = coach_ && coach_->isConfigured()
             ? QString::fromUtf8(u8"正在等待引擎完成剩余分析，然后生成整盘 AI 建议……")
             : QString::fromUtf8(u8"引擎分析会继续保存；配置 DeepSeek 后可生成整盘 AI 建议。");
-        ai_advice_browser_->append(QString::fromUtf8(
-            u8"<div style='background:#f7f1e5;border-radius:8px;padding:12px;margin:10px 0'>"
-            u8"<b>本局已经结束</b><br>%1</div>").arg(progress));
+        appendAdviceCard(QString::fromUtf8(u8"本局已经结束"), progress,
+                         {}, {}, QStringLiteral("notice"));
     }
     if (tabs_) tabs_->setCurrentIndex(0);
     requestPendingGameReviews();
@@ -368,6 +575,19 @@ void MainWindow::handleGameEnded()
 void MainWindow::handleAnalysis(const PikafishAnalyzer::AnalysisResult &result)
 {
     if (!isCurrentMove(result.gameId, result.ply, result.actualMove)) {
+        bool matchedUndo = false;
+        QString undoError;
+        if (!database_.attachAnalysisToUndoEvent(
+                result.gameId, result.ply, result.actualMove, result.bestMove,
+                result.scoreLoss, result.category, result.principalVariation,
+                &matchedUndo, &undoError)) {
+            engine_status_label_->setText(QString::fromUtf8(u8"保存悔棋分析失败：") + undoError);
+        }
+        if (matchedUndo && result.scoreLoss > 30) {
+            coach_->requestCoaching(
+                result, database_.trainingStats(active_user_id_),
+                database_.moveCoachingContext(result.gameId, result.ply));
+        }
         return;
     }
 
@@ -379,6 +599,7 @@ void MainWindow::handleAnalysis(const PikafishAnalyzer::AnalysisResult &result)
         engine_status_label_->setText(QString::fromUtf8(u8"保存分析失败：") + error);
     }
     database_.generateTrainingPositions(active_user_id_);
+    current_analyses_.insert(result.ply, result);
 
     QString categoryText;
     QString color;
@@ -397,31 +618,69 @@ void MainWindow::handleAnalysis(const PikafishAnalyzer::AnalysisResult &result)
     }
 
     const QString html = QString(
-        "<div style='margin-bottom:12px'>"
-        "<b>第 %1 步：</b><span style='color:%2'><b>%3</b></span><br>"
-        "实际走法：<b>%4</b>（<code>%5</code>）<br>"
-        "推荐走法：<b>%6</b>（<code>%7</code>）<br>"
-        "评分：%8 → %9　局面损失：%10<br>%11<br>"
-        "<small>推荐变化：%12</small></div>")
+        "<div style='background:#fbf8f1;border:1px solid #e2d9ca;"
+        "padding:10px;margin:5px 0 10px 0'>"
+        "<div style='color:#756b5d;font-size:12px'>第 %1 步</div>"
+        "<div style='font-size:15px;margin:3px 0 6px 0;color:%2'><b>%3</b></div>"
+        "<b>实战</b>　%4<br>"
+        "<b>推荐</b>　<span style='color:#276b3b'>%5</span><br>"
+        "<span style='color:#756b5d'>局面评价下降 %6 分</span>　"
+        "<a style='color:#245f73;text-decoration:none' href='recommendation:%7'>"
+        "在棋盘上查看推荐着 →</a></div>")
         .arg(result.ply)
         .arg(color, categoryText)
-        .arg(result.actualNotation.toHtmlEscaped(), result.actualMove.toHtmlEscaped())
-        .arg(result.bestNotation.toHtmlEscaped(), result.bestMove.toHtmlEscaped())
-        .arg(result.bestScore)
-        .arg(result.actualScore)
+        .arg(result.actualNotation.toHtmlEscaped())
+        .arg(result.bestNotation.toHtmlEscaped())
         .arg(result.scoreLoss)
-        .arg(result.explanation.toHtmlEscaped(),
-             result.principalVariation.toHtmlEscaped());
+        .arg(result.ply);
     analysis_browser_->append(html);
+    coach_chat_context_ = QString::fromUtf8(
+        u8"对局数据库 ID：%1\n第 %2 步，红方实际走法：%3（%4）\n"
+        u8"Pikafish 推荐：%5（%6）\n评分：%7→%8，局面损失：%9，等级：%10\n"
+        u8"推荐变化：%11\n走棋前局面：%12")
+        .arg(result.gameId).arg(result.ply)
+        .arg(result.actualNotation, result.actualMove,
+             result.bestNotation, result.bestMove)
+        .arg(result.bestScore).arg(result.actualScore).arg(result.scoreLoss)
+        .arg(categoryText, result.principalVariation, result.boardBefore);
+    pending_chat_ply_ = result.ply;
     refreshStats();
     if (result.scoreLoss > 30) {
-        coach_->requestCoaching(result, database_.trainingStats(active_user_id_));
+        coach_->requestCoaching(
+            result, database_.trainingStats(active_user_id_),
+            database_.moveCoachingContext(result.gameId, result.ply));
     }
 }
 
 void MainWindow::handleCoaching(const DeepSeekCoach::CoachingResult &result)
 {
     if (!isCurrentMove(result.gameId, result.ply, result.actualMove)) {
+        bool matchedUndo = false;
+        QString undoError;
+        database_.attachCoachingToUndoEvent(
+            result.gameId, result.ply, result.actualMove, result.diagnosis,
+            result.evidence, result.trainingTask, result.reflectionQuestion,
+            &matchedUndo, &undoError);
+        if (!undoError.isEmpty()) {
+            coach_status_label_->setText(QString::fromUtf8(u8"保存悔棋 AI 建议失败：") + undoError);
+        }
+        if (matchedUndo && result.gameId == current_game_id_) {
+            QFrame *card = appendAdviceCard(
+                QString::fromUtf8(u8"第 %1 步 · 悔棋分支分析").arg(result.ply),
+                result.diagnosis,
+                {QString::fromUtf8(u8"关键变化"), QString::fromUtf8(u8"推荐着的目的"),
+                 QString::fromUtf8(u8"实战判定标准")},
+                {result.evidence, result.trainingTask, result.reflectionQuestion},
+                QStringLiteral("coach"), result.ply);
+            if (card) {
+                card->setProperty("undone", true);
+                if (auto *status = card->findChild<QLabel *>("coachCardStatus")) {
+                    status->setVisible(true);
+                }
+                card->style()->unpolish(card);
+                card->style()->polish(card);
+            }
+        }
         return;
     }
 
@@ -433,20 +692,16 @@ void MainWindow::handleCoaching(const DeepSeekCoach::CoachingResult &result)
         coach_status_label_->setText(QString::fromUtf8(u8"保存 AI 建议失败：") + error);
     }
 
-    const QString html = QString(
-        "<div style='border-left:4px solid #5b4bb7; padding-left:10px; margin:8px 0 16px 0'>"
-        "<b>AI 教练 · 第 %1 步</b><br>"
-        "<b>诊断：</b>%2<br>"
-        "<b>依据：</b>%3<br>"
-        "<b>针对训练：</b>%4<br>"
-        "<b>复盘问题：</b>%5"
-        "</div>")
-        .arg(result.ply)
-        .arg(result.diagnosis.toHtmlEscaped(),
-             result.evidence.toHtmlEscaped(),
-             result.trainingTask.toHtmlEscaped(),
-             result.reflectionQuestion.toHtmlEscaped());
-    ai_advice_browser_->append(html);
+    appendAdviceCard(
+        QString::fromUtf8(u8"第 %1 步 · AI 教练").arg(result.ply), result.diagnosis,
+        {QString::fromUtf8(u8"关键变化"), QString::fromUtf8(u8"推荐着的目的"),
+         QString::fromUtf8(u8"实战判定标准")},
+        {result.evidence, result.trainingTask, result.reflectionQuestion},
+        QStringLiteral("coach"), result.ply);
+    coach_chat_context_ += QString::fromUtf8(
+        u8"\nAI 初步诊断：%1\n关键变化：%2\n推荐着目的：%3\n实战判定标准：%4")
+        .arg(result.diagnosis, result.evidence,
+             result.trainingTask, result.reflectionQuestion);
     if (tabs_) tabs_->setCurrentIndex(0);
     refreshStats();
 }
@@ -524,30 +779,171 @@ void MainWindow::handleGameReview(const DeepSeekCoach::GameReviewResult &result)
     if (result.gameId != current_game_id_ || result.userId != active_user_id_) {
         return;
     }
-    auto htmlText = [](QString text) {
-        return text.toHtmlEscaped().replace("\n", "<br>");
-    };
     const QString reviewTitle = result.model == QStringLiteral("local-engine-coach")
         ? QString::fromUtf8(u8"整盘离线教练总结")
         : QString::fromUtf8(u8"整盘 AI 复盘");
-    const QString html = QString(
-        "<div style='border:1px solid #cbb9e8; background:#f8f5ff; border-radius:8px; "
-        "padding:16px; margin:14px 0'>"
-        "<h2 style='color:#513a86; margin-top:0'>%1</h2>"
-        "<b>总体评价</b><br>%2<br><br>"
-        "<b>关键转折点</b><br>%3<br><br>"
-        "<b>做得好的地方</b><br>%4<br><br>"
-        "<b>可能重复的思考模式</b><br>%5<br><br>"
-        "<b>下一阶段训练计划</b><br>%6<br><br>"
-        "<b>复盘问题</b><br>%7</div>")
-        .arg(reviewTitle, htmlText(result.overview), htmlText(result.turningPoints),
-             htmlText(result.strengths), htmlText(result.recurringPattern),
-             htmlText(result.trainingPlan), htmlText(result.reflectionQuestion));
-    ai_advice_browser_->append(html);
+    appendAdviceCard(
+        reviewTitle, result.overview,
+        {QString::fromUtf8(u8"悔棋专项证据"), QString::fromUtf8(u8"关键转折"),
+         QString::fromUtf8(u8"做得好的地方"), QString::fromUtf8(u8"重复问题"),
+         QString::fromUtf8(u8"下一阶段训练"), QString::fromUtf8(u8"复盘问题")},
+        {currentContext.undoSummary, result.turningPoints, result.strengths,
+         result.recurringPattern, result.trainingPlan, result.reflectionQuestion},
+        QStringLiteral("review"));
+    coach_chat_context_ = QString::fromUtf8(
+        u8"这是第 %1 局的整盘复盘。\n结果：%2，结束原因：%3\n完整棋谱：\n%4\n\n"
+        u8"关键转折点：\n%5\n\n悔棋证据：\n%6\n\n已有复盘：\n%7\n%8\n%9\n%10")
+        .arg(currentContext.gameId).arg(currentContext.result, currentContext.endReason,
+             currentContext.moveTranscript, currentContext.keyMoments,
+             currentContext.undoSummary, result.overview, result.turningPoints,
+             result.recurringPattern, result.trainingPlan);
+    pending_chat_ply_ = 0;
     if (tabs_) tabs_->setCurrentIndex(0);
     coach_status_label_->setText(result.model == QStringLiteral("local-engine-coach")
         ? QString::fromUtf8(u8"整盘离线教练总结已生成并保存")
         : QString::fromUtf8(u8"整盘 AI 建议已生成并保存"));
+    showGameReviewPopup(result, currentContext);
+}
+
+void MainWindow::showGameReviewPopup(
+    const DeepSeekCoach::GameReviewResult &result,
+    const GameDatabase::GameReviewContext &context)
+{
+    auto htmlText = [](QString text) {
+        return text.toHtmlEscaped().replace("\n", "<br>");
+    };
+    QDialog dialog(this);
+    dialog.setWindowTitle(QString::fromUtf8(u8"本局整盘复盘"));
+    dialog.resize(820, 720);
+    dialog.setMinimumSize(680, 560);
+    auto *layout = new QVBoxLayout(&dialog);
+    auto *title = new QLabel(QString::fromUtf8(u8"整盘训练报告"), &dialog);
+    QFont titleFont = title->font();
+    titleFont.setPointSize(19);
+    titleFont.setBold(true);
+    title->setFont(titleFont);
+    auto *subtitle = new QLabel(
+        QString::fromUtf8(u8"引擎证据 + 完整棋谱 + 悔棋决策"), &dialog);
+    subtitle->setStyleSheet("color:#756d62;margin-bottom:6px;");
+    auto *browser = new QTextBrowser(&dialog);
+    browser->setHtml(QString::fromUtf8(
+        u8"<style>body{font-size:15px;line-height:1.6;color:#29251f}"
+        u8".card{background:#fffdf8;border:1px solid #ddd5c6;border-radius:8px;"
+        u8"padding:12px;margin:9px 0}.undo{background:#fff4df;border-color:#dfb77b}"
+        u8"h3{color:#7f352a;margin:0 0 7px 0}</style>"
+        u8"<div class='card'><h3>核心结论</h3>%1</div>"
+        u8"<div class='card undo'><h3>悔棋专项分析</h3>%2</div>"
+        u8"<div class='card'><h3>关键转折</h3>%3</div>"
+        u8"<div class='card'><h3>重复问题</h3>%4</div>"
+        u8"<div class='card'><h3>针对训练</h3>%5</div>"
+        u8"<div class='card'><h3>复盘问题</h3>%6</div>")
+        .arg(htmlText(result.overview), htmlText(context.undoSummary),
+             htmlText(result.turningPoints), htmlText(result.recurringPattern),
+             htmlText(result.trainingPlan), htmlText(result.reflectionQuestion)));
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::accept);
+    layout->addWidget(title);
+    layout->addWidget(subtitle);
+    layout->addWidget(browser, 1);
+    layout->addWidget(buttons);
+    dialog.setStyleSheet(
+        "QDialog{background:#f4f1e9} QTextBrowser{background:#fffdf8;"
+        "border:1px solid #d8cfbf;border-radius:9px;padding:12px}"
+        "QPushButton{min-height:32px;padding:0 18px;border:1px solid #cfc6b7;"
+        "border-radius:6px;background:#fffdf8}");
+    dialog.exec();
+}
+
+void MainWindow::showEngineRecommendation(int ply)
+{
+    const auto it = current_analyses_.constFind(ply);
+    if (it == current_analyses_.constEnd()) return;
+    const auto &result = it.value();
+    if (result.bestMove.size() < 4 || result.boardBefore.isEmpty()) return;
+    const int fromCol = result.bestMove.at(0).toLatin1() - 'a';
+    const int fromRow = 9 - result.bestMove.at(1).digitValue();
+    const int toCol = result.bestMove.at(2).toLatin1() - 'a';
+    const int toRow = 9 - result.bestMove.at(3).digitValue();
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(QString::fromUtf8(u8"Pikafish 推荐着 · 第 %1 步").arg(ply));
+    dialog.resize(720, 820);
+    auto *layout = new QVBoxLayout(&dialog);
+    auto *title = new QLabel(QString::fromUtf8(u8"Pikafish 推荐：%1")
+                                 .arg(result.bestNotation), &dialog);
+    title->setObjectName("recommendationTitle");
+    auto *summary = new QLabel(
+        QString::fromUtf8(u8"实战 %1　·　推荐 %2　·　评价下降 %3 分\n"
+                         u8"棋盘上的粗箭头表示引擎推荐走法。")
+            .arg(result.actualNotation, result.bestNotation)
+            .arg(result.scoreLoss), &dialog);
+    summary->setWordWrap(true);
+    summary->setObjectName("recommendationSummary");
+    auto *board = new XiangqiBoardWidget(&dialog, false);
+    board->setMinimumSize(580, 640);
+    board->loadReviewPosition(result.boardBefore.toStdString(), XiangqiGame::Side::Red,
+                              fromRow, fromCol, toRow, toCol);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::accept);
+    layout->addWidget(title);
+    layout->addWidget(summary);
+    layout->addWidget(board, 1);
+    layout->addWidget(buttons);
+    dialog.setStyleSheet(QString::fromUtf8(R"(
+        QDialog { background:#f4f1e9; font-family:"Microsoft YaHei UI","Segoe UI"; }
+        QLabel#recommendationTitle { font-size:18px; font-weight:700; color:#27363d; }
+        QLabel#recommendationSummary {
+            color:#5d625f; background:#fffdf8; border:1px solid #d8d1c5;
+            border-radius:6px; padding:9px; font-size:13px;
+        }
+        QPushButton { min-height:32px; padding:0 18px; border:1px solid #c8c2b8;
+                      border-radius:6px; background:#fffdf8; }
+    )"));
+    dialog.exec();
+}
+
+void MainWindow::sendCoachQuestion()
+{
+    const QString question = coach_question_edit_->text().trimmed();
+    if (question.isEmpty()) return;
+    if (!coach_ || !coach_->isConfigured()) {
+        QMessageBox::information(this, QString::fromUtf8(u8"AI 教练未启用"),
+                                 QString::fromUtf8(u8"请先在“AI 设置”中配置 DeepSeek API Key。"));
+        return;
+    }
+    if (current_game_id_ < 0 || coach_chat_context_.trimmed().isEmpty()) {
+        QMessageBox::information(this, QString::fromUtf8(u8"还没有可追问的棋局证据"),
+                                 QString::fromUtf8(u8"请先走一步并等待引擎分析，或完成一局棋。"));
+        return;
+    }
+    active_chat_request_id_ = QStringLiteral("main-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    pending_chat_game_id_ = current_game_id_;
+    appendChatBubble(true, question);
+    database_.recordChatMessage(active_user_id_, pending_chat_game_id_,
+                                pending_chat_ply_, "user", question);
+    coach_question_edit_->clear();
+    coach_question_button_->setEnabled(false);
+    const QString previousHistory = coach_chat_history_;
+    coach_chat_history_ += QString::fromUtf8(u8"学习者：%1\n").arg(question);
+    coach_->requestChat(active_chat_request_id_, coach_chat_context_,
+                        previousHistory, question);
+}
+
+void MainWindow::handleChatReply(const QString &requestId, const QString &answer,
+                                 const QString &errorMessage)
+{
+    if (requestId != active_chat_request_id_) return;
+    active_chat_request_id_.clear();
+    coach_question_button_->setEnabled(true);
+    if (!errorMessage.isEmpty()) {
+        appendChatBubble(false, errorMessage, true);
+        return;
+    }
+    appendChatBubble(false, answer);
+    database_.recordChatMessage(active_user_id_, pending_chat_game_id_,
+                                pending_chat_ply_, "assistant", answer);
+    coach_chat_history_ += QString::fromUtf8(u8"AI 教练：%1\n").arg(answer);
 }
 
 void MainWindow::startNewGame()
@@ -570,9 +966,15 @@ void MainWindow::startNewGame()
     board_widget_->newGame();
     current_game_end_reason_ = QStringLiteral("normal");
     analysis_browser_->clear();
-    ai_advice_browser_->clear();
-    ai_advice_browser_->append(QString::fromUtf8(
-        u8"<p style='color:#6d6256'>新对局已开始。AI 会重点解释有训练价值的决策，而不是打断每一步棋。</p>"));
+    current_analyses_.clear();
+    clearAdviceCards();
+    coach_chat_context_.clear();
+    coach_chat_history_.clear();
+    active_chat_request_id_.clear();
+    coach_question_button_->setEnabled(true);
+    appendAdviceCard(QString::fromUtf8(u8"新对局"),
+                     QString::fromUtf8(u8"AI 只解释有训练价值的决策，不打断优秀着法。"),
+                     {}, {}, QStringLiteral("notice"));
     current_game_id_ = database_.startGame(active_user_id_, &error);
     if (current_game_id_ < 0) {
         QMessageBox::warning(this, QString::fromUtf8(u8"无法创建新对局"), error);
@@ -633,16 +1035,11 @@ void MainWindow::undoTurn()
                              QString::fromUtf8(u8"棋盘已经退回，但数据库同步失败：") + error);
     }
 
-    analysis_browser_->clear();
-    analysis_browser_->append(QString::fromUtf8(
-        u8"<p style='color:#555'>已悔棋，撤销 %1 步。%2后续分析将以当前局面为准。</p>")
-        .arg(undone)
-        .arg(evidenceSaved
-                 ? QString::fromUtf8(u8"原着已作为个人学习证据保存；")
-                 : QString::fromUtf8(u8"本次学习证据保存失败；")));
-    ai_advice_browser_->append(QString::fromUtf8(
-        u8"<div style='border-left:4px solid #b47b32;padding:8px 12px;margin:10px 0'>"
-        u8"<b>悔棋已记录</b><br>被撤销的用户着法会进入个人画像，后续训练将重点检查类似决策。</div>"));
+    markUndoneAdviceCards(lastKeptPly);
+    engine_status_label_->setText(
+        evidenceSaved
+            ? QString::fromUtf8(u8"已回退到第 %1 步；撤销分支的原分析已保留").arg(lastKeptPly)
+            : QString::fromUtf8(u8"已回退到第 %1 步；悔棋证据保存失败").arg(lastKeptPly));
     refreshStats();
 }
 
@@ -656,7 +1053,17 @@ void MainWindow::startPersonalTraining()
 void MainWindow::openGameReview()
 {
     GameReviewDialog dialog(&database_, active_user_id_, this);
+    connect(&dialog, &GameReviewDialog::coachQuestionAsked,
+            coach_, &DeepSeekCoach::requestChat);
+    connect(coach_, &DeepSeekCoach::chatReplyReady,
+            &dialog, &GameReviewDialog::receiveChatReply);
     dialog.exec();
+    for (qint64 gameId : dialog.deletedGameIds()) {
+        pending_game_reviews_.remove(gameId);
+        if (gameId == current_game_id_) current_game_id_ = -1;
+    }
+    refreshStats();
+    showMilestoneReportIfNeeded();
 }
 
 void MainWindow::populateUsers()
@@ -736,6 +1143,15 @@ void MainWindow::switchUser(int comboIndex)
     board_widget_->newGame();
     current_game_end_reason_ = QStringLiteral("normal");
     analysis_browser_->clear();
+    current_analyses_.clear();
+    clearAdviceCards();
+    appendAdviceCard(QString::fromUtf8(u8"用户已切换"),
+                     QString::fromUtf8(u8"当前对局和训练数据只属于所选用户。"),
+                     {}, {}, QStringLiteral("notice"));
+    coach_chat_context_.clear();
+    coach_chat_history_.clear();
+    active_chat_request_id_.clear();
+    coach_question_button_->setEnabled(true);
     current_game_id_ = database_.startGame(active_user_id_, &error);
     if (current_game_id_ < 0) {
         QMessageBox::warning(this, QString::fromUtf8(u8"无法创建用户对局"), error);

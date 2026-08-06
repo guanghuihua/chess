@@ -9,6 +9,8 @@
 #include "game_database.h"
 #include "pikafish_analyzer.h"
 
+class QUrl;
+
 class DeepSeekCoach : public QObject
 {
     Q_OBJECT
@@ -46,13 +48,19 @@ public:
     bool removeApiKey(QString *errorMessage = nullptr);
     void testConnection();
     void requestCoaching(const PikafishAnalyzer::AnalysisResult &analysis,
-                         const GameDatabase::TrainingStats &stats);
+                         const GameDatabase::TrainingStats &stats,
+                         const QString &gameContext = QString());
     void requestGameReview(const GameDatabase::GameReviewContext &context,
                            const GameDatabase::TrainingStats &stats);
+    void requestChat(const QString &requestId, const QString &evidenceContext,
+                     const QString &conversationHistory,
+                     const QString &question);
 
 signals:
     void coachingReady(const DeepSeekCoach::CoachingResult &result);
     void gameReviewReady(const DeepSeekCoach::GameReviewResult &result);
+    void chatReplyReady(const QString &requestId, const QString &answer,
+                        const QString &errorMessage);
     void statusChanged(const QString &message, bool available);
     void connectionTested(bool success, const QString &message);
 
@@ -61,27 +69,50 @@ private:
     {
         PikafishAnalyzer::AnalysisResult analysis;
         GameDatabase::TrainingStats stats;
+        QString gameContext;
     };
 
     struct GameReviewRequest
     {
         GameDatabase::GameReviewContext context;
         GameDatabase::TrainingStats stats;
+        int attempt = 0;
+    };
+
+    struct ChatRequest
+    {
+        QString requestId;
+        QString evidenceContext;
+        QString conversationHistory;
+        QString question;
     };
 
     QNetworkAccessManager network_;
     QQueue<Request> requests_;
     QQueue<GameReviewRequest> game_review_requests_;
+    QQueue<ChatRequest> chat_requests_;
     QString api_key_;
+    bool packy_mode_ = false;
     bool busy_ = false;
 
     void processNext();
     void processNextGameReview();
+    void processNextChat();
     void handleReply(class QNetworkReply *reply, const Request &request);
     void handleGameReviewReply(class QNetworkReply *reply,
                                const GameReviewRequest &request);
+    void retryOrFallbackGameReview(const GameReviewRequest &request,
+                                   const QString &reason);
+    void handleChatReply(class QNetworkReply *reply, const ChatRequest &request);
+    static QByteArray makeChatRequestBody(const ChatRequest &request);
     static QByteArray makeRequestBody(const Request &request);
     static QByteArray makeGameReviewRequestBody(const GameReviewRequest &request);
+    QByteArray providerRequestBody(const QByteArray &chatCompletionsBody,
+                                   bool wholeGame) const;
+    QByteArray normalizedResponseBody(const QByteArray &body) const;
+    QString activeFastModel() const;
+    QString activeReviewModel() const;
+    QUrl activeEndpoint() const;
     static bool parseCoachingContent(const QByteArray &body,
                                      const Request &request,
                                      CoachingResult *result,

@@ -9,7 +9,9 @@
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
 #include <QListWidget>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QSlider>
 #include <QSplitter>
@@ -17,6 +19,7 @@
 #include <QTextBrowser>
 #include <QVBoxLayout>
 #include <QVariant>
+#include <QUuid>
 
 namespace {
 QString resultText(const QString &result, const QString &reason)
@@ -85,8 +88,25 @@ GameReviewDialog::GameReviewDialog(GameDatabase *database, qint64 userId,
     move_detail_->setStyleSheet("font-size:14px;line-height:1.5;padding:12px;");
     whole_review_ = new QTextBrowser(detail_tabs_);
     whole_review_->setStyleSheet("font-size:14px;line-height:1.5;padding:12px;");
+    undo_review_ = new QTextBrowser(detail_tabs_);
+    undo_review_->setStyleSheet("font-size:14px;line-height:1.5;padding:12px;");
+    auto *chatTab = new QWidget(detail_tabs_);
+    auto *chatLayout = new QVBoxLayout(chatTab);
+    chatLayout->setContentsMargins(8, 8, 8, 8);
+    chat_browser_ = new QTextBrowser(chatTab);
+    chat_edit_ = new QLineEdit(chatTab);
+    chat_edit_->setPlaceholderText(QString::fromUtf8(
+        u8"针对当前着法或整盘复盘追问，例如：为什么推荐着法更好？"));
+    chat_button_ = new QPushButton(QString::fromUtf8(u8"发送"), chatTab);
+    auto *chatRow = new QHBoxLayout;
+    chatRow->addWidget(chat_edit_, 1);
+    chatRow->addWidget(chat_button_);
+    chatLayout->addWidget(chat_browser_, 1);
+    chatLayout->addLayout(chatRow);
     detail_tabs_->addTab(move_detail_, QString::fromUtf8(u8"当前着法"));
     detail_tabs_->addTab(whole_review_, QString::fromUtf8(u8"整盘建议"));
+    detail_tabs_->addTab(undo_review_, QString::fromUtf8(u8"悔棋记录"));
+    detail_tabs_->addTab(chatTab, QString::fromUtf8(u8"追问教练"));
     reviewSplitter->addWidget(board_);
     reviewSplitter->addWidget(detail_tabs_);
     reviewSplitter->setSizes({620, 430});
@@ -114,7 +134,12 @@ GameReviewDialog::GameReviewDialog(GameDatabase *database, qint64 userId,
     splitter->setStretchFactor(1, 1);
     root->addWidget(splitter, 1);
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, this);
+    delete_button_ = new QPushButton(QString::fromUtf8(u8"删除所选对局"), buttons);
+    delete_button_->setObjectName("deleteGameButton");
+    buttons->addButton(delete_button_, QDialogButtonBox::ActionRole);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
+    connect(delete_button_, &QPushButton::clicked,
+            this, &GameReviewDialog::deleteSelectedGame);
     root->addWidget(buttons);
 
     connect(game_list_, &QListWidget::currentRowChanged,
@@ -128,6 +153,10 @@ GameReviewDialog::GameReviewDialog(GameDatabase *database, qint64 userId,
             this, [this] { showPosition(position_index_ + 1); });
     connect(last_button_, &QPushButton::clicked,
             this, [this] { showPosition(static_cast<int>(moves_.size())); });
+    connect(chat_button_, &QPushButton::clicked,
+            this, &GameReviewDialog::sendChatQuestion);
+    connect(chat_edit_, &QLineEdit::returnPressed,
+            this, &GameReviewDialog::sendChatQuestion);
 
     setStyleSheet(QString::fromUtf8(R"(
         QDialog { background:#f4f1e9; color:#29251f; }
@@ -139,8 +168,15 @@ GameReviewDialog::GameReviewDialog(GameDatabase *database, qint64 userId,
         QPushButton { min-height:32px; padding:0 12px; border:1px solid #cfc6b7;
                       border-radius:6px; background:#fffdf8; }
         QPushButton:hover { background:#efe7da; }
+        QPushButton#deleteGameButton { color:#9b342b; border-color:#d9a8a1; }
+        QPushButton#deleteGameButton:hover { background:#fbe8e5; }
     )"));
     loadGames();
+}
+
+QVector<qint64> GameReviewDialog::deletedGameIds() const
+{
+    return deleted_game_ids_;
 }
 
 void GameReviewDialog::loadGames()
@@ -152,16 +188,21 @@ void GameReviewDialog::loadGames()
         const QString reviewMark = game.hasReview ? QString::fromUtf8(u8" · 已总结") : QString();
         auto *item = new QListWidgetItem(
             QString::fromUtf8(u8"第 %1 局  %2\n%3  · %4 步%5")
-                .arg(game.id).arg(resultText(game.result, game.endReason))
+                .arg(game.sequenceNumber).arg(resultText(game.result, game.endReason))
                 .arg(game.startedAt.left(16)).arg(game.moveCount).arg(reviewMark),
             game_list_);
         item->setData(Qt::UserRole, game.id);
+        item->setData(Qt::UserRole + 1, game.sequenceNumber);
     }
     if (game_list_->count() > 0) {
         game_list_->setCurrentRow(0);
     } else {
+        game_id_ = -1;
+        moves_.clear();
         game_title_->setText(QString::fromUtf8(u8"当前用户还没有可复盘的已完成对局。"));
         move_detail_->setHtml(QString::fromUtf8(u8"<p>完成一盘棋后，对局会出现在这里。</p>"));
+        whole_review_->clear();
+        board_->newGame();
         updateNavigation();
     }
 }
@@ -174,6 +215,8 @@ void GameReviewDialog::loadSelectedGame()
     moves_ = database_->recordedMoves(game_id_);
     game_title_->setText(item->text().replace('\n', QString::fromUtf8(u8"　")));
     whole_review_->setHtml(reviewHtml(game_id_));
+    undo_review_->setHtml(undoHtml(game_id_));
+    loadChatHistory();
     timeline_->setRange(0, static_cast<int>(moves_.size()));
     showPosition(0);
 }
@@ -218,6 +261,106 @@ void GameReviewDialog::updateNavigation()
                                  .arg(position_index_).arg(maximum));
 }
 
+void GameReviewDialog::deleteSelectedGame()
+{
+    auto *item = game_list_->currentItem();
+    if (!item || !database_) return;
+    const qint64 gameId = item->data(Qt::UserRole).toLongLong();
+    const int sequenceNumber = item->data(Qt::UserRole + 1).toInt();
+    const auto answer = QMessageBox::warning(
+        this, QString::fromUtf8(u8"删除对局"),
+        QString::fromUtf8(
+            u8"确定删除第 %1 局吗？\n\n这会永久删除该局的棋谱、引擎分析、AI 建议、"
+            u8"整盘总结以及由该局生成的专项训练记录，并重新计算个人画像。此操作不能撤销。")
+            .arg(sequenceNumber),
+        QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
+    if (answer != QMessageBox::Yes) return;
+
+    QString error;
+    if (!database_->deleteCompletedGame(user_id_, gameId, &error)) {
+        QMessageBox::critical(this, QString::fromUtf8(u8"删除失败"), error);
+        return;
+    }
+    deleted_game_ids_.push_back(gameId);
+    game_id_ = -1;
+    moves_.clear();
+    loadGames();
+    if (!error.isEmpty()) {
+        QMessageBox::warning(this, QString::fromUtf8(u8"对局已删除"), error);
+    }
+}
+
+void GameReviewDialog::sendChatQuestion()
+{
+    const QString question = chat_edit_->text().trimmed();
+    if (question.isEmpty() || game_id_ < 0 || !chat_request_id_.isEmpty()) return;
+    const int ply = position_index_ > 0 && position_index_ <= moves_.size()
+        ? moves_[position_index_ - 1].ply : 0;
+    chat_request_id_ = QStringLiteral("review-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    chat_request_game_id_ = game_id_;
+    chat_request_ply_ = ply;
+    database_->recordChatMessage(user_id_, game_id_, ply, "user", question);
+    const QString previousHistory = chat_history_;
+    chat_history_ += QString::fromUtf8(u8"学习者：%1\n").arg(question);
+    chat_browser_->append(QString::fromUtf8(
+        u8"<div style='text-align:right;margin:8px'><b>你：</b>%1</div>")
+        .arg(question.toHtmlEscaped()));
+    chat_edit_->clear();
+    chat_button_->setEnabled(false);
+    emit coachQuestionAsked(chat_request_id_, chatEvidenceContext(),
+                            previousHistory, question);
+}
+
+void GameReviewDialog::receiveChatReply(const QString &requestId,
+                                        const QString &answer,
+                                        const QString &errorMessage)
+{
+    if (requestId != chat_request_id_) return;
+    chat_request_id_.clear();
+    chat_button_->setEnabled(true);
+    if (!errorMessage.isEmpty()) {
+        chat_browser_->append(QString::fromUtf8(
+            u8"<p style='color:#9b342b'><b>回答失败：</b>%1</p>")
+            .arg(errorMessage.toHtmlEscaped()));
+        return;
+    }
+    database_->recordChatMessage(user_id_, chat_request_game_id_,
+                                 chat_request_ply_, "assistant", answer);
+    if (game_id_ != chat_request_game_id_) return;
+    chat_history_ += QString::fromUtf8(u8"AI 教练：%1\n").arg(answer);
+    chat_browser_->append(QString::fromUtf8(
+        u8"<div style='border-left:4px solid #5b4bb7;padding:8px;margin:8px 0'>"
+        u8"<b>AI 教练：</b><br>%1</div>")
+        .arg(answer.toHtmlEscaped().replace("\n", "<br>")));
+}
+
+void GameReviewDialog::loadChatHistory()
+{
+    chat_browser_->clear();
+    chat_history_.clear();
+    if (!database_ || game_id_ < 0) return;
+    const auto messages = database_->chatMessages(user_id_, game_id_);
+    for (const auto &message : messages) {
+        if (message.role == "assistant") {
+            chat_browser_->append(QString::fromUtf8(
+                u8"<div style='border-left:4px solid #5b4bb7;padding:8px;margin:8px 0'>"
+                u8"<b>AI 教练：</b><br>%1</div>")
+                .arg(message.content.toHtmlEscaped().replace("\n", "<br>")));
+            chat_history_ += QString::fromUtf8(u8"AI 教练：%1\n").arg(message.content);
+        } else {
+            chat_browser_->append(QString::fromUtf8(
+                u8"<div style='text-align:right;margin:8px'><b>你：</b>%1</div>")
+                .arg(message.content.toHtmlEscaped()));
+            chat_history_ += QString::fromUtf8(u8"学习者：%1\n").arg(message.content);
+        }
+    }
+    if (messages.isEmpty()) {
+        chat_browser_->setHtml(QString::fromUtf8(
+            u8"<p style='color:#777'>选择某一步后，可以针对该局面和引擎证据追问 AI 教练。对话会保存在这盘棋中。</p>"));
+    }
+}
+
 QString GameReviewDialog::moveHtml(const GameDatabase::RecordedMove &move) const
 {
     const auto side = move.side == "red" ? XiangqiGame::Side::Red : XiangqiGame::Side::Black;
@@ -235,21 +378,16 @@ QString GameReviewDialog::moveHtml(const GameDatabase::RecordedMove &move) const
     }
     const QString bestNotation = PikafishAnalyzer::toChineseNotation(
         move.boardBefore.toStdString(), side, move.bestMove);
-    const QString pv = PikafishAnalyzer::toChinesePrincipalVariation(
-        move.boardBefore.toStdString(), side, move.principalVariation);
     html += QString::fromUtf8(
         u8"<div style='background:#f7f1e5;border-radius:7px;padding:10px'>"
-        u8"<b>引擎评价：</b>%1<br><b>推荐着法：</b>%2 <code>%3</code><br>"
-        u8"<b>评分变化：</b>%4 → %5　<b>损失：</b>%6<br>"
-        u8"<b>推荐变化：</b>%7</div>")
-        .arg(categoryText(move.category), bestNotation.toHtmlEscaped(),
-             move.bestMove.toHtmlEscaped())
-        .arg(move.bestScore).arg(move.actualScore).arg(move.scoreLoss)
-        .arg(pv.toHtmlEscaped());
+        u8"<b>引擎评价：</b>%1<br><b>推荐着法：</b>%2<br>"
+        u8"<b>局面评价下降：</b>%3 分</div>")
+        .arg(categoryText(move.category), bestNotation.toHtmlEscaped())
+        .arg(move.scoreLoss);
     if (!move.diagnosis.isEmpty()) {
         html += QString::fromUtf8(
-            u8"<h3>AI 教练意见</h3><p><b>诊断：</b>%1<br><b>依据：</b>%2<br>"
-            u8"<b>训练任务：</b>%3<br><b>复盘问题：</b>%4</p>")
+            u8"<h3>AI 教练意见</h3><p><b>诊断：</b>%1<br><b>关键变化：</b>%2<br>"
+            u8"<b>推荐着的目的：</b>%3<br><b>实战判定标准：</b>%4</p>")
             .arg(htmlText(move.diagnosis), htmlText(move.evidence),
                  htmlText(move.trainingTask), htmlText(move.reflectionQuestion));
     }
@@ -270,4 +408,77 @@ QString GameReviewDialog::reviewHtml(qint64 gameId) const
         .arg(htmlText(review.overview), htmlText(review.turningPoints),
              htmlText(review.strengths), htmlText(review.recurringPattern),
              htmlText(review.trainingPlan), htmlText(review.reflectionQuestion));
+}
+
+QString GameReviewDialog::undoHtml(qint64 gameId) const
+{
+    const auto events = database_->gameUndoEvents(gameId);
+    if (events.isEmpty()) {
+        return QString::fromUtf8(u8"<p>这盘棋没有悔棋记录。</p>");
+    }
+    QString html = QString::fromUtf8(
+        u8"<h2>悔棋学习记录</h2><p style='color:#6d6256'>"
+        u8"这些着法即使从正式棋谱中撤销，也会作为独立学习证据永久保留。</p>");
+    for (const auto &event : events) {
+        const QString actualNotation = PikafishAnalyzer::toChineseNotation(
+            event.boardBefore.toStdString(), XiangqiGame::Side::Red, event.actualMove);
+        const QString bestNotation = event.bestMove.isEmpty() ? QString() :
+            PikafishAnalyzer::toChineseNotation(
+                event.boardBefore.toStdString(), XiangqiGame::Side::Red, event.bestMove);
+        html += QString::fromUtf8(
+            u8"<div style='border-left:4px solid #b47b32;background:#fff8e9;"
+            u8"padding:10px 12px;margin:10px 0'><h3>第 %1 步后悔棋</h3>"
+            u8"<b>撤销的着法：</b>%2 <code>%3</code><br>")
+            .arg(event.redMovePly)
+            .arg(actualNotation.toHtmlEscaped(), event.actualMove.toHtmlEscaped());
+        if (event.hadAnalysis) {
+            html += QString::fromUtf8(
+                u8"<b>引擎评价：</b>%1，损失 %2<br>"
+                u8"<b>推荐着法：</b>%3<br>")
+                .arg(categoryText(event.category)).arg(event.scoreLoss)
+                .arg(bestNotation.toHtmlEscaped());
+        } else {
+            html += QString::fromUtf8(
+                u8"<span style='color:#777'>引擎分析尚未完成；如果结果稍后返回，系统会自动回填到这里。</span><br>");
+        }
+        if (!event.diagnosis.isEmpty()) {
+            html += QString::fromUtf8(
+                u8"<b>AI 教练诊断：</b>%1<br><b>关键变化：</b>%2<br>"
+                u8"<b>推荐着的目的：</b>%3<br><b>实战判定标准：</b>%4")
+                .arg(htmlText(event.diagnosis), htmlText(event.evidence),
+                     htmlText(event.trainingTask), htmlText(event.reflectionQuestion));
+        }
+        html += "</div>";
+    }
+    return html;
+}
+
+QString GameReviewDialog::chatEvidenceContext() const
+{
+    QString context = QString::fromUtf8(u8"对局数据库 ID：%1\n").arg(game_id_);
+    if (position_index_ > 0 && position_index_ <= moves_.size()) {
+        const auto &move = moves_[position_index_ - 1];
+        context += QString::fromUtf8(
+            u8"当前查看第 %1 步，实际着法 %2，推荐着法 %3，评分 %4→%5，"
+            u8"损失 %6，等级 %7，推荐变化 %8，走棋前局面 %9。\n")
+            .arg(move.ply).arg(move.actualMove, move.bestMove)
+            .arg(move.bestScore).arg(move.actualScore).arg(move.scoreLoss)
+            .arg(move.category, move.principalVariation, move.boardBefore);
+    } else {
+        context += QString::fromUtf8(u8"当前查看整盘初始局面。\n");
+    }
+    GameDatabase::GameReviewContext reviewContext;
+    if (database_->buildGameReviewContext(game_id_, &reviewContext)) {
+        context += QString::fromUtf8(
+            u8"关键转折点：\n%1\n悔棋证据：\n%2\n完整棋谱：\n%3\n")
+            .arg(reviewContext.keyMoments, reviewContext.undoSummary,
+                 reviewContext.moveTranscript);
+    }
+    const auto review = database_->gameReview(game_id_);
+    if (review.gameId >= 0) {
+        context += QString::fromUtf8(u8"已有整盘复盘：\n%1\n%2\n%3\n%4")
+            .arg(review.overview, review.turningPoints,
+                 review.recurringPattern, review.trainingPlan);
+    }
+    return context;
 }

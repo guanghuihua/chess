@@ -13,6 +13,7 @@
 
 class QPaintEvent;
 class QMouseEvent;
+class QEvent;
 class QPainter;
 class QPoint;
 class QPointF;
@@ -54,6 +55,8 @@ signals:
 protected:
     void paintEvent(QPaintEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void leaveEvent(QEvent *event) override;
 
 private:
     struct Cell
@@ -64,6 +67,7 @@ private:
 
     XiangqiGame game_;
     std::optional<Cell> selected_;
+    std::optional<Cell> hovered_;
     QProcess engine_process_;
     QTimer engine_timeout_;
     QString engine_buffer_;
@@ -87,6 +91,7 @@ private:
     void drawLastMove(QPainter &painter);
     void drawPieces(QPainter &painter);
     void drawSelection(QPainter &painter);
+    void drawMoveHints(QPainter &painter);
 
     void startEngine();
     void requestEngineMove();

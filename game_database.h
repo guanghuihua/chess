@@ -48,6 +48,10 @@ public:
         QString category;
         QString principalVariation;
         bool hadAnalysis = false;
+        QString diagnosis;
+        QString evidence;
+        QString trainingTask;
+        QString reflectionQuestion;
         QString requestedAt;
     };
 
@@ -154,6 +158,7 @@ public:
     struct GameSummary
     {
         qint64 id = -1;
+        int sequenceNumber = 0;
         QString startedAt;
         QString finishedAt;
         QString result;
@@ -222,6 +227,16 @@ public:
         QString createdAt;
     };
 
+    struct ChatMessage
+    {
+        qint64 id = -1;
+        qint64 gameId = -1;
+        int ply = 0;
+        QString role;
+        QString content;
+        QString createdAt;
+    };
+
     GameDatabase();
     ~GameDatabase();
 
@@ -244,6 +259,22 @@ public:
     bool recordUndoEvent(qint64 gameId, int lastKeptPly, int undonePlies,
                          QString *errorMessage = nullptr);
     QVector<UndoEvent> undoEvents(qint64 userId, int limit = 50) const;
+    QVector<UndoEvent> gameUndoEvents(qint64 gameId) const;
+    bool attachAnalysisToUndoEvent(qint64 gameId, int ply,
+                                   const QString &actualMove,
+                                   const QString &bestMove, int scoreLoss,
+                                   const QString &category,
+                                   const QString &principalVariation,
+                                   bool *matched = nullptr,
+                                   QString *errorMessage = nullptr);
+    bool attachCoachingToUndoEvent(qint64 gameId, int ply,
+                                   const QString &actualMove,
+                                   const QString &diagnosis,
+                                   const QString &evidence,
+                                   const QString &trainingTask,
+                                   const QString &reflectionQuestion,
+                                   bool *matched = nullptr,
+                                   QString *errorMessage = nullptr);
     bool recordAnalysis(qint64 gameId, int ply, const QString &actualMove,
                         const QString &bestMove, int bestScore, int actualScore,
                         int scoreLoss, const QString &category,
@@ -254,6 +285,7 @@ public:
                         const QString &trainingTask,
                         const QString &reflectionQuestion,
                         QString *errorMessage = nullptr);
+    QString moveCoachingContext(qint64 gameId, int throughPly) const;
     bool buildGameReviewContext(qint64 gameId, GameReviewContext *context,
                                 QString *errorMessage = nullptr) const;
     bool recordGameReview(const GameReview &review,
@@ -279,6 +311,13 @@ public:
                                                    int limit = 10) const;
     QVector<GameSummary> completedGames(qint64 userId, int limit = 100) const;
     QVector<RecordedMove> recordedMoves(qint64 gameId) const;
+    bool recordChatMessage(qint64 userId, qint64 gameId, int ply,
+                           const QString &role, const QString &content,
+                           QString *errorMessage = nullptr);
+    QVector<ChatMessage> chatMessages(qint64 userId, qint64 gameId,
+                                      int ply = -1) const;
+    bool deleteCompletedGame(qint64 userId, qint64 gameId,
+                             QString *errorMessage = nullptr);
     bool rebuildPersonalization(qint64 userId, QString *errorMessage = nullptr);
     QVector<ProfileDimension> profileDimensions(qint64 userId) const;
     TrainingPlan currentTrainingPlan(qint64 userId) const;
