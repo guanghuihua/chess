@@ -128,6 +128,24 @@ $env:DEEPSEEK_API_KEY = "这里填写新密钥"
 
 在同一个 PowerShell 窗口中启动 Qt Creator，或者在 Qt Creator 的项目运行环境中添加该变量。不要把真实密钥提交到 Git。
 
+## 在 VS Code 中启动 Packy Codex Agent
+
+本机的官方 Codex 登录与 Packy API 使用独立配置，互不覆盖。项目根目录中的 `APIKEY` 仍是唯一的 Packy 密钥来源，不会进入 Git。
+
+在 VS Code 中按 `Ctrl+Shift+P`，选择 **Tasks: Run Task**，然后运行：
+
+```text
+Start Packy Codex Agent
+```
+
+也可以在项目的 PowerShell 终端中运行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/codex-packy.ps1
+```
+
+该启动器会临时读取 `APIKEY`，使用用户目录中的独立 `packy` Codex 配置档和 `gpt-5.6-terra`，并自动加载项目根目录的 `AGENTS.md`。退出 Agent 后不会在 PowerShell 环境中保留密钥，也不会改变 Codex 桌面应用原有的官方登录。
+
 Packy 模式使用 `gpt-5.6-terra`（中等推理）生成单步讲解和追问，使用 `gpt-5.6-sol`（高推理）生成整盘复盘；DeepSeek 后备模式使用 `deepseek-v4-flash` 和 `deepseek-v4-pro`。为了控制费用，优秀着法使用本地说明，只有局面损失超过 30 时才请求单步讲解。单步分析会携带从开局到当前的正式棋谱、既有引擎结论和全部悔棋分支，并强制输出具体线路、对手回应、推荐着真实目的和实战判定标准，禁止“重做三次”“落子前自问”等模板话。整盘复盘包括完整着法序列、胜负、阶段统计、关键转折点、思考时间和全部悔棋证据。解析失败或网络错误会自动重试，仍失败时保存基于 Pikafish 数据的本地复盘。模型只负责解释皮卡鱼证据，不能修改引擎评分或编造变化。
 
 ## 自动化验证
