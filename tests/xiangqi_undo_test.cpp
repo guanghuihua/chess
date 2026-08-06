@@ -27,6 +27,11 @@ int main()
     assert(game.result() == XiangqiGame::GameResult::Ongoing);
     assert(!game.undoLastMove());
 
+    assert(game.resign(XiangqiGame::Side::Red));
+    assert(game.result() == XiangqiGame::GameResult::BlackWins);
+    assert(!game.resign(XiangqiGame::Side::Red));
+
+    game = XiangqiGame();
     assert(game.loadPosition(afterRed, XiangqiGame::Side::Black));
     assert(game.boardString() == afterRed);
     assert(game.sideToMove() == XiangqiGame::Side::Black);

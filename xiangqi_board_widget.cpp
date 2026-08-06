@@ -126,6 +126,23 @@ void XiangqiBoardWidget::newGame()
     update();
 }
 
+bool XiangqiBoardWidget::resign(XiangqiGame::Side side)
+{
+    if (training_mode_ || !game_.resign(side)) {
+        return false;
+    }
+    engine_timeout_.stop();
+    selected_.reset();
+    if (engine_busy_ && engine_process_.state() == QProcess::Running) {
+        ignore_next_bestmove_ = true;
+        engine_process_.write("stop\n");
+    }
+    engine_busy_ = false;
+    update();
+    emit gameEnded();
+    return true;
+}
+
 bool XiangqiBoardWidget::loadTrainingPosition(const std::string &board)
 {
     engine_timeout_.stop();

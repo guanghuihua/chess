@@ -64,7 +64,8 @@ bool GameDatabase::executeSchema(QString *errorMessage)
 
         "CREATE TABLE IF NOT EXISTS games ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL DEFAULT 1, "
-        "started_at TEXT NOT NULL, finished_at TEXT, result TEXT NOT NULL DEFAULT 'ongoing')",
+        "started_at TEXT NOT NULL, finished_at TEXT, result TEXT NOT NULL DEFAULT 'ongoing', "
+        "end_reason TEXT NOT NULL DEFAULT 'normal')",
 
         "CREATE TABLE IF NOT EXISTS moves ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT, game_id INTEGER NOT NULL, ply INTEGER NOT NULL, "
@@ -149,20 +150,31 @@ bool GameDatabase::executeSchema(QString *errorMessage)
     }
 
     bool hasUserId = false;
+    bool hasEndReason = false;
     QSqlQuery columns(database_);
     if (!columns.exec("PRAGMA table_info(games)")) {
         if (errorMessage) *errorMessage = columns.lastError().text();
         return false;
     }
     while (columns.next()) {
-        if (columns.value(1).toString() == "user_id") {
+        const QString columnName = columns.value(1).toString();
+        if (columnName == "user_id") {
             hasUserId = true;
-            break;
+        } else if (columnName == "end_reason") {
+            hasEndReason = true;
         }
     }
     if (!hasUserId) {
         QSqlQuery migration(database_);
         if (!migration.exec("ALTER TABLE games ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1")) {
+            if (errorMessage) *errorMessage = migration.lastError().text();
+            return false;
+        }
+    }
+    if (!hasEndReason) {
+        QSqlQuery migration(database_);
+        if (!migration.exec(
+                "ALTER TABLE games ADD COLUMN end_reason TEXT NOT NULL DEFAULT 'normal'")) {
             if (errorMessage) *errorMessage = migration.lastError().text();
             return false;
         }
@@ -212,7 +224,7 @@ bool GameDatabase::buildGameReviewContext(qint64 gameId,
     }
 
     QSqlQuery game(database_);
-    game.prepare("SELECT user_id, result FROM games WHERE id = ?");
+    game.prepare("SELECT user_id, result, end_reason FROM games WHERE id = ?");
     game.addBindValue(gameId);
     if (!game.exec() || !game.next()) {
         if (errorMessage) {
@@ -231,6 +243,7 @@ bool GameDatabase::buildGameReviewContext(qint64 gameId,
     built.gameId = gameId;
     built.userId = game.value(0).toLongLong();
     built.result = result;
+    built.endReason = game.value(2).toString();
 
     struct PhaseData { int count = 0; int totalLoss = 0; };
     PhaseData opening, middle, ending;
@@ -668,10 +681,19 @@ bool GameDatabase::recordMove(qint64 gameId, const XiangqiGame::MoveRecord &move
 bool GameDatabase::finishGame(qint64 gameId, XiangqiGame::GameResult result,
                               QString *errorMessage)
 {
+    return finishGame(gameId, result, QStringLiteral("normal"), errorMessage);
+}
+
+bool GameDatabase::finishGame(qint64 gameId, XiangqiGame::GameResult result,
+                              const QString &endReason,
+                              QString *errorMessage)
+{
     QSqlQuery query(database_);
-    query.prepare("UPDATE games SET finished_at = ?, result = ? WHERE id = ?");
+    query.prepare("UPDATE games SET finished_at = ?, result = ?, end_reason = ? WHERE id = ?");
     query.addBindValue(QDateTime::currentDateTime().toString(Qt::ISODateWithMs));
     query.addBindValue(resultName(result));
+    query.addBindValue(endReason.trimmed().isEmpty() ? QStringLiteral("normal")
+                                                     : endReason.trimmed());
     query.addBindValue(gameId);
     if (!query.exec()) {
         if (errorMessage) {

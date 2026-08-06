@@ -37,6 +37,7 @@ public:
 
     const XiangqiGame &game() const;
     void newGame();
+    bool resign(XiangqiGame::Side side);
     int undoTurn();
     bool loadTrainingPosition(const std::string &board);
     void setDifficulty(Difficulty difficulty);

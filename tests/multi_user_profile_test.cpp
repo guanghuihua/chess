@@ -116,12 +116,14 @@ int main(int argc, char *argv[])
         database.trainingSummary(bob).attempts != 0) {
         return 12;
     }
-    if (!database.finishGame(trainingGame, XiangqiGame::GameResult::RedWins, &error)) {
+    if (!database.finishGame(trainingGame, XiangqiGame::GameResult::BlackWins,
+                             "resignation", &error)) {
         return 13;
     }
     GameDatabase::GameReviewContext context;
     if (!database.buildGameReviewContext(trainingGame, &context, &error)
-        || context.userId != alice || context.totalMoves != 1
+        || context.userId != alice || context.endReason != "resignation"
+        || context.totalMoves != 1
         || context.redMoves != 1 || context.analyzedMoves != 1
         || !context.moveTranscript.contains("a3a4")
         || context.keyMoments.isEmpty()) {

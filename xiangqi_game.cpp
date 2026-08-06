@@ -88,6 +88,15 @@ bool XiangqiGame::move(int fromRow, int fromCol, int toRow, int toCol,
     return true;
 }
 
+bool XiangqiGame::resign(Side side)
+{
+    if (result_ != GameResult::Ongoing) {
+        return false;
+    }
+    result_ = side == Side::Red ? GameResult::BlackWins : GameResult::RedWins;
+    return true;
+}
+
 bool XiangqiGame::undoLastMove()
 {
     if (move_history_.empty()) {

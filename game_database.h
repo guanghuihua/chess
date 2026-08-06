@@ -92,6 +92,7 @@ public:
         qint64 gameId = -1;
         qint64 userId = -1;
         QString result;
+        QString endReason;
         int totalMoves = 0;
         int redMoves = 0;
         int analyzedMoves = 0;
@@ -130,6 +131,9 @@ public:
     bool recordMove(qint64 gameId, const XiangqiGame::MoveRecord &move,
                     QString *errorMessage = nullptr);
     bool finishGame(qint64 gameId, XiangqiGame::GameResult result,
+                    QString *errorMessage = nullptr);
+    bool finishGame(qint64 gameId, XiangqiGame::GameResult result,
+                    const QString &endReason,
                     QString *errorMessage = nullptr);
     bool truncateGame(qint64 gameId, int lastKeptPly,
                       QString *errorMessage = nullptr);

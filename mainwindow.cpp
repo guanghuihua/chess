@@ -77,6 +77,8 @@ MainWindow::MainWindow(QWidget *parent)
 
     auto *undoButton = new QPushButton(QString::fromUtf8(u8"悔棋"), header);
     undoButton->setProperty("secondary", true);
+    auto *resignButton = new QPushButton(QString::fromUtf8(u8"认输"), header);
+    resignButton->setProperty("danger", true);
     auto *trainingButton = new QPushButton(QString::fromUtf8(u8"专项训练"), header);
     trainingButton->setProperty("secondary", true);
     auto *deepSeekButton = new QPushButton(QString::fromUtf8(u8"AI 设置"), header);
@@ -84,6 +86,7 @@ MainWindow::MainWindow(QWidget *parent)
     auto *newGameButton = new QPushButton(QString::fromUtf8(u8"新对局"), header);
     newGameButton->setObjectName("primaryButton");
     headerLayout->addWidget(undoButton);
+    headerLayout->addWidget(resignButton);
     headerLayout->addWidget(trainingButton);
     headerLayout->addWidget(deepSeekButton);
     headerLayout->addWidget(newGameButton);
@@ -192,6 +195,10 @@ MainWindow::MainWindow(QWidget *parent)
             color: white; background: #9b3f2f; border-color: #873426; font-weight: 600;
         }
         QPushButton#primaryButton:hover { background: #ad4937; }
+        QPushButton[danger="true"] {
+            color: #9b342b; background: #fff0ed; border-color: #e5b9b2;
+        }
+        QPushButton[danger="true"]:hover { background: #f8dcd7; }
         QComboBox {
             min-height: 32px; padding: 0 9px; border: 1px solid #cfc6b7;
             border-radius: 6px; background: white;
@@ -239,6 +246,8 @@ MainWindow::MainWindow(QWidget *parent)
             this, &MainWindow::startNewGame);
     connect(undoButton, &QPushButton::clicked,
             this, &MainWindow::undoTurn);
+    connect(resignButton, &QPushButton::clicked,
+            this, &MainWindow::resignGame);
     connect(trainingButton, &QPushButton::clicked,
             this, &MainWindow::startPersonalTraining);
     connect(createUserButton, &QPushButton::clicked,
@@ -304,7 +313,8 @@ void MainWindow::handleGameEnded()
         return;
     }
     QString error;
-    if (!database_.finishGame(current_game_id_, board_widget_->game().result(), &error)) {
+    if (!database_.finishGame(current_game_id_, board_widget_->game().result(),
+                              current_game_end_reason_, &error)) {
         QMessageBox::warning(this, QString::fromUtf8(u8"保存结果失败"), error);
         return;
     }
@@ -489,12 +499,36 @@ void MainWindow::startNewGame()
         database_.abandonGame(current_game_id_, &error);
     }
     board_widget_->newGame();
+    current_game_end_reason_ = QStringLiteral("normal");
     analysis_browser_->clear();
     current_game_id_ = database_.startGame(active_user_id_, &error);
     if (current_game_id_ < 0) {
         QMessageBox::warning(this, QString::fromUtf8(u8"无法创建新对局"), error);
     }
     refreshStats();
+}
+
+void MainWindow::resignGame()
+{
+    if (current_game_id_ < 0
+        || board_widget_->game().result() != XiangqiGame::GameResult::Ongoing) {
+        QMessageBox::information(this, QString::fromUtf8(u8"无法认输"),
+                                 QString::fromUtf8(u8"当前没有正在进行的有效对局。"));
+        return;
+    }
+    const auto answer = QMessageBox::question(
+        this, QString::fromUtf8(u8"确认认输"),
+        QString::fromUtf8(u8"认输后本局将记为黑方获胜，并保存到你的个人数据库。确定继续吗？"));
+    if (answer != QMessageBox::Yes) {
+        return;
+    }
+    current_game_end_reason_ = QStringLiteral("resignation");
+    if (!board_widget_->resign(XiangqiGame::Side::Red)) {
+        current_game_end_reason_ = QStringLiteral("normal");
+        return;
+    }
+    QMessageBox::information(this, QString::fromUtf8(u8"本局结束"),
+                             QString::fromUtf8(u8"红方认输，黑方获胜。本局数据已经保存。"));
 }
 
 void MainWindow::undoTurn()
@@ -605,6 +639,7 @@ void MainWindow::switchUser(int comboIndex)
     active_user_id_ = newUserId;
 
     board_widget_->newGame();
+    current_game_end_reason_ = QStringLiteral("normal");
     analysis_browser_->clear();
     current_game_id_ = database_.startGame(active_user_id_, &error);
     if (current_game_id_ < 0) {

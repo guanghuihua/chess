@@ -45,6 +45,7 @@ private:
     qint64 current_game_id_ = -1;
     qint64 active_user_id_ = 1;
     QSet<qint64> pending_game_reviews_;
+    QString current_game_end_reason_ = QStringLiteral("normal");
 
     void initializeTrainingSystem();
     void handleMoveCompleted();
@@ -54,6 +55,7 @@ private:
     void handleGameReview(const DeepSeekCoach::GameReviewResult &result);
     void requestPendingGameReviews();
     void startNewGame();
+    void resignGame();
     void undoTurn();
     void startPersonalTraining();
     void createUser();

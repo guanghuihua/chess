@@ -291,13 +291,14 @@ QByteArray DeepSeekCoach::makeGameReviewRequestBody(
 
     const QString userPrompt = QString::fromUtf8(
         u8"请根据以下证据完成整盘复盘。\n"
-        u8"对局编号：%1\n结果：%2\n总手数：%3，红方走法：%4，已分析红方走法：%5\n"
-        u8"本局平均损失：%6，明显失误：%7，严重失误：%8，红方平均思考：%9 秒\n\n"
-        u8"各阶段表现：\n%10\n\n关键转折点（最多五个）：\n%11\n\n"
-        u8"完整着法记录：\n%12\n\n"
-        u8"长期个人统计：完成对局 %13，分析走法 %14，平均损失 %15，"
-        u8"轻微失误 %16，明显失误 %17，严重失误 %18。")
-        .arg(context.gameId).arg(context.result)
+        u8"对局编号：%1\n结果：%2\n结束原因：%3\n"
+        u8"总手数：%4，红方走法：%5，已分析红方走法：%6\n"
+        u8"本局平均损失：%7，明显失误：%8，严重失误：%9，红方平均思考：%10 秒\n\n"
+        u8"各阶段表现：\n%11\n\n关键转折点（最多五个）：\n%12\n\n"
+        u8"完整着法记录：\n%13\n\n"
+        u8"长期个人统计：完成对局 %14，分析走法 %15，平均损失 %16，"
+        u8"轻微失误 %17，明显失误 %18，严重失误 %19。")
+        .arg(context.gameId).arg(context.result).arg(context.endReason)
         .arg(context.totalMoves).arg(context.redMoves).arg(context.analyzedMoves)
         .arg(context.averageLoss, 0, 'f', 1)
         .arg(context.mistakes).arg(context.blunders)
