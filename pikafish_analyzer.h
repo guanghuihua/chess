@@ -36,10 +36,12 @@ public:
 
     void analyzeMove(qint64 gameId, const XiangqiGame::MoveRecord &move);
     bool isAvailable() const;
+    bool hasPendingAnalysis() const;
     QString enginePath() const;
 
 signals:
     void analysisReady(const PikafishAnalyzer::AnalysisResult &result);
+    void analysisQueueDrained();
     void statusChanged(const QString &message, bool available);
 
 private:

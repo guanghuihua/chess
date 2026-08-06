@@ -25,12 +25,16 @@ PikafishAnalyzer::PikafishAnalyzer(QObject *parent)
     });
     connect(&process_, &QProcess::errorOccurred, this, [this](QProcess::ProcessError) {
         state_ = State::Stopped;
+        requests_.clear();
         emit statusChanged(QString::fromUtf8(u8"皮卡鱼启动失败：") + process_.errorString(), false);
+        emit analysisQueueDrained();
     });
     connect(&process_, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
             this, [this](int, QProcess::ExitStatus) {
                 state_ = State::Stopped;
+                requests_.clear();
                 emit statusChanged(QString::fromUtf8(u8"皮卡鱼已停止"), false);
+                emit analysisQueueDrained();
             });
 
     QTimer::singleShot(0, this, &PikafishAnalyzer::startEngine);
@@ -66,6 +70,18 @@ bool PikafishAnalyzer::isAvailable() const
     return !engine_path_.isEmpty() && process_.state() == QProcess::Running;
 }
 
+bool PikafishAnalyzer::hasPendingAnalysis() const
+{
+    if (engine_path_.isEmpty()) {
+        return false;
+    }
+    return !requests_.isEmpty()
+           || state_ == State::WaitingForUci
+           || state_ == State::WaitingForReady
+           || state_ == State::AnalyzingBefore
+           || state_ == State::AnalyzingAfter;
+}
+
 QString PikafishAnalyzer::enginePath() const
 {
     return engine_path_;
@@ -78,6 +94,8 @@ void PikafishAnalyzer::startEngine()
     }
     if (engine_path_.isEmpty()) {
         emit statusChanged(QString::fromUtf8(u8"未找到皮卡鱼；对局仍会保存，但暂不自动复盘"), false);
+        requests_.clear();
+        emit analysisQueueDrained();
         return;
     }
 
@@ -87,7 +105,9 @@ void PikafishAnalyzer::startEngine()
     process_.start();
     if (!process_.waitForStarted(3000)) {
         state_ = State::Stopped;
+        requests_.clear();
         emit statusChanged(QString::fromUtf8(u8"无法启动皮卡鱼：") + process_.errorString(), false);
+        emit analysisQueueDrained();
         return;
     }
     sendCommand("uci");
@@ -120,6 +140,9 @@ void PikafishAnalyzer::handleLine(const QString &line)
         state_ = State::Idle;
         emit statusChanged(QString::fromUtf8(u8"皮卡鱼已就绪，红方每步将自动复盘"), true);
         processNextRequest();
+        if (state_ == State::Idle) {
+            emit analysisQueueDrained();
+        }
         return;
     }
 
@@ -208,6 +231,7 @@ void PikafishAnalyzer::finishCurrentAnalysis()
     processNextRequest();
     if (state_ == State::Idle) {
         emit statusChanged(QString::fromUtf8(u8"皮卡鱼已就绪"), true);
+        emit analysisQueueDrained();
     }
 }
 

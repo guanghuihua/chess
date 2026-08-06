@@ -3,6 +3,7 @@
 
 #include <QMainWindow>
 #include <QObject>
+#include <QSet>
 
 #include "game_database.h"
 #include "deepseek_coach.h"
@@ -43,12 +44,15 @@ private:
     DeepSeekCoach *coach_ = nullptr;
     qint64 current_game_id_ = -1;
     qint64 active_user_id_ = 1;
+    QSet<qint64> pending_game_reviews_;
 
     void initializeTrainingSystem();
     void handleMoveCompleted();
     void handleGameEnded();
     void handleAnalysis(const PikafishAnalyzer::AnalysisResult &result);
     void handleCoaching(const DeepSeekCoach::CoachingResult &result);
+    void handleGameReview(const DeepSeekCoach::GameReviewResult &result);
+    void requestPendingGameReviews();
     void startNewGame();
     void undoTurn();
     void startPersonalTraining();

@@ -87,6 +87,13 @@ bool GameDatabase::executeSchema(QString *errorMessage)
         "training_task TEXT NOT NULL, reflection_question TEXT NOT NULL, created_at TEXT NOT NULL, "
         "UNIQUE(game_id, ply), FOREIGN KEY(game_id) REFERENCES games(id))",
 
+        "CREATE TABLE IF NOT EXISTS game_reviews ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, game_id INTEGER NOT NULL UNIQUE, "
+        "model TEXT NOT NULL, overview TEXT NOT NULL, turning_points TEXT NOT NULL, "
+        "strengths TEXT NOT NULL, recurring_pattern TEXT NOT NULL, "
+        "training_plan TEXT NOT NULL, reflection_question TEXT NOT NULL, "
+        "created_at TEXT NOT NULL, FOREIGN KEY(game_id) REFERENCES games(id))",
+
         "CREATE TABLE IF NOT EXISTS training_positions ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT, source_game_id INTEGER NOT NULL, "
         "source_ply INTEGER NOT NULL, board TEXT NOT NULL, best_move TEXT NOT NULL, "
@@ -108,6 +115,7 @@ bool GameDatabase::executeSchema(QString *errorMessage)
 
         "CREATE INDEX IF NOT EXISTS idx_moves_game ON moves(game_id, ply)",
         "CREATE INDEX IF NOT EXISTS idx_analyses_game ON analyses(game_id, ply)",
+        "CREATE INDEX IF NOT EXISTS idx_game_reviews_game ON game_reviews(game_id)",
         "CREATE INDEX IF NOT EXISTS idx_training_due ON training_positions(next_review_at, mastery)",
         "CREATE INDEX IF NOT EXISTS idx_training_attempts_position "
         "ON training_attempts(training_position_id)",
@@ -192,6 +200,189 @@ bool GameDatabase::recordCoaching(qint64 gameId, int ply, const QString &model,
         return false;
     }
     return true;
+}
+
+bool GameDatabase::buildGameReviewContext(qint64 gameId,
+                                          GameReviewContext *context,
+                                          QString *errorMessage) const
+{
+    if (!context) {
+        if (errorMessage) *errorMessage = QString::fromUtf8(u8"整盘复盘上下文不能为空");
+        return false;
+    }
+
+    QSqlQuery game(database_);
+    game.prepare("SELECT user_id, result FROM games WHERE id = ?");
+    game.addBindValue(gameId);
+    if (!game.exec() || !game.next()) {
+        if (errorMessage) {
+            *errorMessage = game.lastError().isValid()
+                ? game.lastError().text() : QString::fromUtf8(u8"找不到对局");
+        }
+        return false;
+    }
+    const QString result = game.value(1).toString();
+    if (result == "ongoing" || result == "abandoned") {
+        if (errorMessage) *errorMessage = QString::fromUtf8(u8"只有已完成的有效对局才能整盘复盘");
+        return false;
+    }
+
+    GameReviewContext built;
+    built.gameId = gameId;
+    built.userId = game.value(0).toLongLong();
+    built.result = result;
+
+    struct PhaseData { int count = 0; int totalLoss = 0; };
+    PhaseData opening, middle, ending;
+    QStringList transcript;
+    QSqlQuery moves(database_);
+    moves.prepare(
+        "SELECT m.ply, m.side, m.from_row, m.from_col, m.to_row, m.to_col, "
+        "m.moved_piece, m.captured_piece, m.thinking_time_ms, "
+        "a.score_loss, a.category "
+        "FROM moves m LEFT JOIN analyses a ON a.game_id=m.game_id AND a.ply=m.ply "
+        "WHERE m.game_id=? ORDER BY m.ply");
+    moves.addBindValue(gameId);
+    if (!moves.exec()) {
+        if (errorMessage) *errorMessage = moves.lastError().text();
+        return false;
+    }
+    qint64 totalRedThinkingTime = 0;
+    while (moves.next()) {
+        const int ply = moves.value(0).toInt();
+        const QString side = moves.value(1).toString();
+        auto square = [](int row, int col) {
+            return QString(QChar('a' + col)) + QChar('9' - row);
+        };
+        const QString uci = square(moves.value(2).toInt(), moves.value(3).toInt())
+                            + square(moves.value(4).toInt(), moves.value(5).toInt());
+        const QString captured = moves.value(7).toString();
+        const qint64 thinkingTime = moves.value(8).toLongLong();
+        transcript.push_back(QString::fromUtf8(u8"%1. %2 %3 %4%5（%6 秒）")
+            .arg(ply)
+            .arg(side == "red" ? QString::fromUtf8(u8"红") : QString::fromUtf8(u8"黑"))
+            .arg(moves.value(6).toString(), uci,
+                 captured.isEmpty() ? QString() : QString::fromUtf8(u8" 吃") + captured)
+            .arg(thinkingTime / 1000.0, 0, 'f', 1));
+        ++built.totalMoves;
+        if (side != "red") continue;
+        ++built.redMoves;
+        totalRedThinkingTime += thinkingTime;
+        if (moves.value(9).isNull()) continue;
+        const int loss = std::min(300, std::max(0, moves.value(9).toInt()));
+        const QString category = moves.value(10).toString();
+        ++built.analyzedMoves;
+        built.averageLoss += loss;
+        if (category == "mistake") ++built.mistakes;
+        if (category == "blunder") ++built.blunders;
+        PhaseData *phase = ply <= 20 ? &opening : (ply <= 60 ? &middle : &ending);
+        ++phase->count;
+        phase->totalLoss += loss;
+    }
+    if (built.analyzedMoves > 0) built.averageLoss /= built.analyzedMoves;
+    if (built.redMoves > 0) {
+        built.averageThinkingTimeMs = static_cast<double>(totalRedThinkingTime) / built.redMoves;
+    }
+    built.moveTranscript = transcript.join('\n');
+
+    auto phaseText = [](const QString &name, const PhaseData &phase) {
+        return phase.count == 0
+            ? name + QString::fromUtf8(u8"：没有可用分析")
+            : QString::fromUtf8(u8"%1：分析 %2 步，平均损失 %3")
+                  .arg(name).arg(phase.count)
+                  .arg(static_cast<double>(phase.totalLoss) / phase.count, 0, 'f', 1);
+    };
+    built.phaseSummary = QStringList{
+        phaseText(QString::fromUtf8(u8"开局（1～20）"), opening),
+        phaseText(QString::fromUtf8(u8"中局（21～60）"), middle),
+        phaseText(QString::fromUtf8(u8"残局（61 以后）"), ending)
+    }.join('\n');
+
+    QSqlQuery moments(database_);
+    moments.prepare(
+        "SELECT a.ply, a.actual_move, a.best_move, a.best_score, a.actual_score, "
+        "MIN(a.score_loss,300), a.category, a.principal_variation, m.board_before "
+        "FROM analyses a JOIN moves m ON m.game_id=a.game_id AND m.ply=a.ply "
+        "WHERE a.game_id=? AND a.score_loss>30 "
+        "ORDER BY MIN(a.score_loss,300) DESC, a.ply ASC LIMIT 5");
+    moments.addBindValue(gameId);
+    if (!moments.exec()) {
+        if (errorMessage) *errorMessage = moments.lastError().text();
+        return false;
+    }
+    QStringList keyMoments;
+    while (moments.next()) {
+        keyMoments.push_back(QString::fromUtf8(
+            u8"第 %1 步：实际 %2，推荐 %3，评分 %4→%5，损失 %6，等级 %7；"
+            u8"推荐变化：%8；走棋前局面：%9")
+            .arg(moments.value(0).toInt())
+            .arg(moments.value(1).toString(), moments.value(2).toString())
+            .arg(moments.value(3).toInt()).arg(moments.value(4).toInt())
+            .arg(moments.value(5).toInt())
+            .arg(moments.value(6).toString(), moments.value(7).toString(),
+                 moments.value(8).toString()));
+    }
+    built.keyMoments = keyMoments.isEmpty()
+        ? QString::fromUtf8(u8"没有局面损失超过 30 的关键失误。")
+        : keyMoments.join('\n');
+    *context = built;
+    return true;
+}
+
+bool GameDatabase::recordGameReview(const GameReview &review,
+                                    QString *errorMessage)
+{
+    QSqlQuery query(database_);
+    query.prepare(
+        "INSERT OR REPLACE INTO game_reviews(game_id, model, overview, turning_points, "
+        "strengths, recurring_pattern, training_plan, reflection_question, created_at) "
+        "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    query.addBindValue(review.gameId);
+    query.addBindValue(review.model);
+    query.addBindValue(review.overview);
+    query.addBindValue(review.turningPoints);
+    query.addBindValue(review.strengths);
+    query.addBindValue(review.recurringPattern);
+    query.addBindValue(review.trainingPlan);
+    query.addBindValue(review.reflectionQuestion);
+    query.addBindValue(review.createdAt.isEmpty()
+                           ? QDateTime::currentDateTime().toString(Qt::ISODateWithMs)
+                           : review.createdAt);
+    if (!query.exec()) {
+        if (errorMessage) *errorMessage = query.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+bool GameDatabase::hasGameReview(qint64 gameId) const
+{
+    QSqlQuery query(database_);
+    query.prepare("SELECT 1 FROM game_reviews WHERE game_id=?");
+    query.addBindValue(gameId);
+    return query.exec() && query.next();
+}
+
+GameDatabase::GameReview GameDatabase::gameReview(qint64 gameId) const
+{
+    GameReview review;
+    QSqlQuery query(database_);
+    query.prepare(
+        "SELECT game_id, model, overview, turning_points, strengths, recurring_pattern, "
+        "training_plan, reflection_question, created_at FROM game_reviews WHERE game_id=?");
+    query.addBindValue(gameId);
+    if (query.exec() && query.next()) {
+        review.gameId = query.value(0).toLongLong();
+        review.model = query.value(1).toString();
+        review.overview = query.value(2).toString();
+        review.turningPoints = query.value(3).toString();
+        review.strengths = query.value(4).toString();
+        review.recurringPattern = query.value(5).toString();
+        review.trainingPlan = query.value(6).toString();
+        review.reflectionQuestion = query.value(7).toString();
+        review.createdAt = query.value(8).toString();
+    }
+    return review;
 }
 
 QVector<GameDatabase::User> GameDatabase::users() const
@@ -498,6 +689,15 @@ bool GameDatabase::truncateGame(qint64 gameId, int lastKeptPly,
         if (errorMessage) {
             *errorMessage = database_.lastError().text();
         }
+        return false;
+    }
+
+    QSqlQuery reviewQuery(database_);
+    reviewQuery.prepare("DELETE FROM game_reviews WHERE game_id = ?");
+    reviewQuery.addBindValue(gameId);
+    if (!reviewQuery.exec()) {
+        database_.rollback();
+        if (errorMessage) *errorMessage = reviewQuery.lastError().text();
         return false;
     }
 

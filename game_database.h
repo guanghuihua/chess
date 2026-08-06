@@ -87,6 +87,36 @@ public:
         int blunders = 0;
     };
 
+    struct GameReviewContext
+    {
+        qint64 gameId = -1;
+        qint64 userId = -1;
+        QString result;
+        int totalMoves = 0;
+        int redMoves = 0;
+        int analyzedMoves = 0;
+        double averageLoss = 0.0;
+        double averageThinkingTimeMs = 0.0;
+        int mistakes = 0;
+        int blunders = 0;
+        QString moveTranscript;
+        QString phaseSummary;
+        QString keyMoments;
+    };
+
+    struct GameReview
+    {
+        qint64 gameId = -1;
+        QString model;
+        QString overview;
+        QString turningPoints;
+        QString strengths;
+        QString recurringPattern;
+        QString trainingPlan;
+        QString reflectionQuestion;
+        QString createdAt;
+    };
+
     GameDatabase();
     ~GameDatabase();
 
@@ -113,6 +143,12 @@ public:
                         const QString &trainingTask,
                         const QString &reflectionQuestion,
                         QString *errorMessage = nullptr);
+    bool buildGameReviewContext(qint64 gameId, GameReviewContext *context,
+                                QString *errorMessage = nullptr) const;
+    bool recordGameReview(const GameReview &review,
+                          QString *errorMessage = nullptr);
+    bool hasGameReview(qint64 gameId) const;
+    GameReview gameReview(qint64 gameId) const;
     int generateTrainingPositions(qint64 userId, QString *errorMessage = nullptr);
     QVector<TrainingPosition> dueTrainingPositions(qint64 userId, int limit = 10) const;
     bool recordTrainingAttempt(qint64 positionId, const QString &attemptedMove,

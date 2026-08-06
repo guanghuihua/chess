@@ -211,6 +211,8 @@ MainWindow::MainWindow(QWidget *parent)
             this, &MainWindow::handleGameEnded);
     connect(analyzer_, &PikafishAnalyzer::analysisReady,
             this, &MainWindow::handleAnalysis);
+    connect(analyzer_, &PikafishAnalyzer::analysisQueueDrained,
+            this, &MainWindow::requestPendingGameReviews);
     connect(analyzer_, &PikafishAnalyzer::statusChanged,
             this, [this](const QString &message, bool available) {
                 engine_status_label_->setText(message);
@@ -220,6 +222,12 @@ MainWindow::MainWindow(QWidget *parent)
             });
     connect(coach_, &DeepSeekCoach::coachingReady,
             this, &MainWindow::handleCoaching);
+    connect(coach_, &DeepSeekCoach::gameReviewReady,
+            this, &MainWindow::handleGameReview);
+    connect(coach_, &DeepSeekCoach::connectionTested,
+            this, [this](bool success, const QString &) {
+                if (success) requestPendingGameReviews();
+            });
     connect(coach_, &DeepSeekCoach::statusChanged,
             this, [this](const QString &message, bool available) {
                 coach_status_label_->setText(message);
@@ -298,7 +306,10 @@ void MainWindow::handleGameEnded()
     QString error;
     if (!database_.finishGame(current_game_id_, board_widget_->game().result(), &error)) {
         QMessageBox::warning(this, QString::fromUtf8(u8"保存结果失败"), error);
+        return;
     }
+    pending_game_reviews_.insert(current_game_id_);
+    requestPendingGameReviews();
     refreshStats();
     showMilestoneReportIfNeeded();
 }
@@ -385,6 +396,79 @@ void MainWindow::handleCoaching(const DeepSeekCoach::CoachingResult &result)
              result.reflectionQuestion.toHtmlEscaped());
     analysis_browser_->append(html);
     refreshStats();
+}
+
+void MainWindow::requestPendingGameReviews()
+{
+    if (!coach_ || !coach_->isConfigured() || !analyzer_
+        || analyzer_->hasPendingAnalysis()) {
+        return;
+    }
+
+    const QList<qint64> pending = pending_game_reviews_.values();
+    for (qint64 gameId : pending) {
+        if (database_.hasGameReview(gameId)) {
+            pending_game_reviews_.remove(gameId);
+            continue;
+        }
+        GameDatabase::GameReviewContext context;
+        QString error;
+        if (!database_.buildGameReviewContext(gameId, &context, &error)) {
+            pending_game_reviews_.remove(gameId);
+            coach_status_label_->setText(QString::fromUtf8(u8"无法准备整盘复盘：") + error);
+            continue;
+        }
+        coach_->requestGameReview(context, database_.trainingStats(context.userId));
+        pending_game_reviews_.remove(gameId);
+    }
+}
+
+void MainWindow::handleGameReview(const DeepSeekCoach::GameReviewResult &result)
+{
+    GameDatabase::GameReviewContext currentContext;
+    QString error;
+    if (!database_.buildGameReviewContext(result.gameId, &currentContext, &error)
+        || currentContext.userId != result.userId) {
+        return;
+    }
+
+    GameDatabase::GameReview review;
+    review.gameId = result.gameId;
+    review.model = result.model;
+    review.overview = result.overview;
+    review.turningPoints = result.turningPoints;
+    review.strengths = result.strengths;
+    review.recurringPattern = result.recurringPattern;
+    review.trainingPlan = result.trainingPlan;
+    review.reflectionQuestion = result.reflectionQuestion;
+    if (!database_.recordGameReview(review, &error)) {
+        coach_status_label_->setText(QString::fromUtf8(u8"保存整盘复盘失败：") + error);
+        return;
+    }
+
+    if (result.gameId != current_game_id_ || result.userId != active_user_id_) {
+        return;
+    }
+    auto htmlText = [](QString text) {
+        return text.toHtmlEscaped().replace("\n", "<br>");
+    };
+    const QString html = QString(
+        "<div style='border:1px solid #cbb9e8; background:#f8f5ff; border-radius:8px; "
+        "padding:12px; margin:14px 0'>"
+        "<h3 style='color:#513a86; margin-top:0'>整盘 AI 复盘</h3>"
+        "<b>总体评价</b><br>%1<br><br>"
+        "<b>关键转折点</b><br>%2<br><br>"
+        "<b>做得好的地方</b><br>%3<br><br>"
+        "<b>可能重复的思考模式</b><br>%4<br><br>"
+        "<b>下一阶段训练计划</b><br>%5<br><br>"
+        "<b>复盘问题</b><br>%6</div>")
+        .arg(htmlText(result.overview), htmlText(result.turningPoints),
+             htmlText(result.strengths), htmlText(result.recurringPattern),
+             htmlText(result.trainingPlan), htmlText(result.reflectionQuestion));
+    analysis_browser_->append(html);
+    QMessageBox::information(
+        this, QString::fromUtf8(u8"整盘 AI 复盘已完成"),
+        QString::fromUtf8(u8"本局的整体分析已经生成并保存，请在“走法分析”中查看。"));
 }
 
 void MainWindow::startNewGame()

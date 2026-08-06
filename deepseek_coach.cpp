@@ -112,9 +112,24 @@ void DeepSeekCoach::requestCoaching(
     processNext();
 }
 
+void DeepSeekCoach::requestGameReview(
+    const GameDatabase::GameReviewContext &context,
+    const GameDatabase::TrainingStats &stats)
+{
+    if (api_key_.isEmpty() || context.gameId < 0) {
+        return;
+    }
+    game_review_requests_.enqueue(GameReviewRequest{context, stats});
+    processNext();
+}
+
 void DeepSeekCoach::processNext()
 {
-    if (busy_ || requests_.isEmpty() || api_key_.isEmpty()) {
+    if (busy_ || api_key_.isEmpty()) {
+        return;
+    }
+    if (requests_.isEmpty()) {
+        processNextGameReview();
         return;
     }
 
@@ -130,6 +145,28 @@ void DeepSeekCoach::processNext()
     QNetworkReply *reply = network_.post(networkRequest, makeRequestBody(requestData));
     connect(reply, &QNetworkReply::finished, this, [this, reply, requestData] {
         handleReply(reply, requestData);
+    });
+}
+
+void DeepSeekCoach::processNextGameReview()
+{
+    if (busy_ || game_review_requests_.isEmpty() || api_key_.isEmpty()) {
+        return;
+    }
+
+    busy_ = true;
+    const GameReviewRequest requestData = game_review_requests_.dequeue();
+    QNetworkRequest networkRequest(QUrl(QString::fromLatin1(endpoint)));
+    networkRequest.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    networkRequest.setRawHeader("Authorization", "Bearer " + api_key_.toUtf8());
+    networkRequest.setTransferTimeout(60000);
+
+    emit statusChanged(QString::fromUtf8(u8"DeepSeek 正在生成第 %1 盘的整盘复盘……")
+                           .arg(requestData.context.gameId), true);
+    QNetworkReply *reply = network_.post(
+        networkRequest, makeGameReviewRequestBody(requestData));
+    connect(reply, &QNetworkReply::finished, this, [this, reply, requestData] {
+        handleGameReviewReply(reply, requestData);
     });
 }
 
@@ -157,6 +194,36 @@ void DeepSeekCoach::handleReply(QNetworkReply *reply, const Request &request)
 
     emit coachingReady(result);
     emit statusChanged(QString::fromUtf8(u8"DeepSeek AI 教练已就绪"), true);
+    processNext();
+}
+
+void DeepSeekCoach::handleGameReviewReply(QNetworkReply *reply,
+                                          const GameReviewRequest &request)
+{
+    const QByteArray responseBody = reply->readAll();
+    const QNetworkReply::NetworkError networkError = reply->error();
+    const QString networkErrorText = reply->errorString();
+    reply->deleteLater();
+    busy_ = false;
+
+    if (networkError != QNetworkReply::NoError) {
+        emit statusChanged(QString::fromUtf8(u8"整盘复盘请求失败：")
+                               + networkErrorText, false);
+        processNext();
+        return;
+    }
+
+    GameReviewResult result;
+    QString error;
+    if (!parseGameReviewContent(responseBody, request, &result, &error)) {
+        emit statusChanged(QString::fromUtf8(u8"整盘复盘返回内容无法解析：")
+                               + error, false);
+        processNext();
+        return;
+    }
+
+    emit gameReviewReady(result);
+    emit statusChanged(QString::fromUtf8(u8"DeepSeek 整盘复盘已完成"), true);
     processNext();
 }
 
@@ -200,6 +267,51 @@ QByteArray DeepSeekCoach::makeRequestBody(const Request &request)
     body["stream"] = false;
     body["max_tokens"] = 700;
     body["temperature"] = 0.3;
+    body["thinking"] = QJsonObject{{"type", "disabled"}};
+    body["response_format"] = QJsonObject{{"type", "json_object"}};
+    body["messages"] = QJsonArray{
+        QJsonObject{{"role", "system"}, {"content", systemPrompt}},
+        QJsonObject{{"role", "user"}, {"content", userPrompt}}
+    };
+    return QJsonDocument(body).toJson(QJsonDocument::Compact);
+}
+
+QByteArray DeepSeekCoach::makeGameReviewRequestBody(
+    const GameReviewRequest &request)
+{
+    const auto &context = request.context;
+    const auto &stats = request.stats;
+    const QString systemPrompt = QString::fromUtf8(
+        u8"你是一名严谨、友善的中国象棋复盘教练。Pikafish 已负责棋局计算；"
+        u8"你只能依据完整棋谱、评分统计和关键转折点进行教学总结，不得编造变化或修改引擎结论。"
+        u8"重点分析红方的决策过程，区分偶然失误和可能重复的思考习惯。"
+        u8"若证据不足，必须明确说明。输出且只输出一个 JSON 对象，包含六个字符串字段："
+        u8"overview、turning_points、strengths、recurring_pattern、training_plan、"
+        u8"reflection_question。使用简洁中文；训练计划必须包含 2～3 个可执行任务。");
+
+    const QString userPrompt = QString::fromUtf8(
+        u8"请根据以下证据完成整盘复盘。\n"
+        u8"对局编号：%1\n结果：%2\n总手数：%3，红方走法：%4，已分析红方走法：%5\n"
+        u8"本局平均损失：%6，明显失误：%7，严重失误：%8，红方平均思考：%9 秒\n\n"
+        u8"各阶段表现：\n%10\n\n关键转折点（最多五个）：\n%11\n\n"
+        u8"完整着法记录：\n%12\n\n"
+        u8"长期个人统计：完成对局 %13，分析走法 %14，平均损失 %15，"
+        u8"轻微失误 %16，明显失误 %17，严重失误 %18。")
+        .arg(context.gameId).arg(context.result)
+        .arg(context.totalMoves).arg(context.redMoves).arg(context.analyzedMoves)
+        .arg(context.averageLoss, 0, 'f', 1)
+        .arg(context.mistakes).arg(context.blunders)
+        .arg(context.averageThinkingTimeMs / 1000.0, 0, 'f', 1)
+        .arg(context.phaseSummary, context.keyMoments, context.moveTranscript)
+        .arg(stats.games).arg(stats.analyzedMoves)
+        .arg(stats.averageLoss, 0, 'f', 1)
+        .arg(stats.inaccuracies).arg(stats.mistakes).arg(stats.blunders);
+
+    QJsonObject body;
+    body["model"] = QString::fromLatin1(modelName);
+    body["stream"] = false;
+    body["max_tokens"] = 1400;
+    body["temperature"] = 0.25;
     body["thinking"] = QJsonObject{{"type", "disabled"}};
     body["response_format"] = QJsonObject{{"type", "json_object"}};
     body["messages"] = QJsonArray{
@@ -263,6 +375,64 @@ bool DeepSeekCoach::parseCoachingContent(const QByteArray &body,
     result->diagnosis = diagnosis;
     result->evidence = evidence;
     result->trainingTask = trainingTask;
+    result->reflectionQuestion = reflectionQuestion;
+    return true;
+}
+
+bool DeepSeekCoach::parseGameReviewContent(
+    const QByteArray &body,
+    const GameReviewRequest &request,
+    GameReviewResult *result,
+    QString *errorMessage)
+{
+    QJsonParseError outerError;
+    const QJsonDocument outerDocument = QJsonDocument::fromJson(body, &outerError);
+    if (outerError.error != QJsonParseError::NoError || !outerDocument.isObject()) {
+        *errorMessage = outerError.errorString();
+        return false;
+    }
+    const QJsonObject outer = outerDocument.object();
+    if (outer.contains("error")) {
+        *errorMessage = outer.value("error").toObject().value("message").toString();
+        return false;
+    }
+    const QJsonArray choices = outer.value("choices").toArray();
+    if (choices.isEmpty()) {
+        *errorMessage = QString::fromUtf8(u8"响应中没有 choices");
+        return false;
+    }
+    const QString content = choices[0].toObject()
+                                .value("message").toObject()
+                                .value("content").toString();
+    QJsonParseError contentError;
+    const QJsonDocument contentDocument = QJsonDocument::fromJson(
+        content.toUtf8(), &contentError);
+    if (contentError.error != QJsonParseError::NoError || !contentDocument.isObject()) {
+        *errorMessage = contentError.errorString();
+        return false;
+    }
+    const QJsonObject review = contentDocument.object();
+    const QString overview = review.value("overview").toString().trimmed();
+    const QString turningPoints = review.value("turning_points").toString().trimmed();
+    const QString strengths = review.value("strengths").toString().trimmed();
+    const QString recurringPattern = review.value("recurring_pattern").toString().trimmed();
+    const QString trainingPlan = review.value("training_plan").toString().trimmed();
+    const QString reflectionQuestion = review.value("reflection_question").toString().trimmed();
+    if (overview.isEmpty() || turningPoints.isEmpty() || strengths.isEmpty()
+        || recurringPattern.isEmpty() || trainingPlan.isEmpty()
+        || reflectionQuestion.isEmpty()) {
+        *errorMessage = QString::fromUtf8(u8"JSON 缺少整盘复盘必要字段");
+        return false;
+    }
+
+    result->gameId = request.context.gameId;
+    result->userId = request.context.userId;
+    result->model = QString::fromLatin1(modelName);
+    result->overview = overview;
+    result->turningPoints = turningPoints;
+    result->strengths = strengths;
+    result->recurringPattern = recurringPattern;
+    result->trainingPlan = trainingPlan;
     result->reflectionQuestion = reflectionQuestion;
     return true;
 }

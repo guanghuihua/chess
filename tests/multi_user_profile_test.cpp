@@ -116,5 +116,35 @@ int main(int argc, char *argv[])
         database.trainingSummary(bob).attempts != 0) {
         return 12;
     }
+    if (!database.finishGame(trainingGame, XiangqiGame::GameResult::RedWins, &error)) {
+        return 13;
+    }
+    GameDatabase::GameReviewContext context;
+    if (!database.buildGameReviewContext(trainingGame, &context, &error)
+        || context.userId != alice || context.totalMoves != 1
+        || context.redMoves != 1 || context.analyzedMoves != 1
+        || !context.moveTranscript.contains("a3a4")
+        || context.keyMoments.isEmpty()) {
+        return 14;
+    }
+    GameDatabase::GameReview review;
+    review.gameId = trainingGame;
+    review.model = "mock-reviewer";
+    review.overview = QString::fromUtf8(u8"整体评价");
+    review.turningPoints = QString::fromUtf8(u8"关键转折");
+    review.strengths = QString::fromUtf8(u8"优点");
+    review.recurringPattern = QString::fromUtf8(u8"思考模式");
+    review.trainingPlan = QString::fromUtf8(u8"训练计划");
+    review.reflectionQuestion = QString::fromUtf8(u8"复盘问题");
+    if (!database.recordGameReview(review, &error)
+        || !database.hasGameReview(trainingGame)
+        || database.gameReview(trainingGame).trainingPlan != review.trainingPlan) {
+        return 15;
+    }
+    if (!database.truncateGame(trainingGame, 0, &error)
+        || database.hasGameReview(trainingGame)
+        || database.buildGameReviewContext(trainingGame, &context)) {
+        return 16;
+    }
     return 0;
 }
