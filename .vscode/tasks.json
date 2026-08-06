@@ -11,7 +11,10 @@
         "-ExecutionPolicy",
         "Bypass",
         "-File",
-        "${workspaceFolder}\\scripts\\codex-packy.ps1"
+        "${env:LOCALAPPDATA}\\MindDuet\\AgentKit\\mindduet-agent.ps1",
+        "packy",
+        "-ProjectRoot",
+        "${workspaceFolder}"
       ],
       "options": {
         "cwd": "${workspaceFolder}"
@@ -37,7 +40,10 @@
         "-ExecutionPolicy",
         "Bypass",
         "-File",
-        "${workspaceFolder}\\scripts\\aider-deepseek.ps1"
+        "${env:LOCALAPPDATA}\\MindDuet\\AgentKit\\mindduet-agent.ps1",
+        "deepseek",
+        "-ProjectRoot",
+        "${workspaceFolder}"
       ],
       "options": {
         "cwd": "${workspaceFolder}"
