@@ -12,7 +12,8 @@
 #include <QUrl>
 
 namespace {
-const char modelName[] = "deepseek-v4-flash";
+const char fastModelName[] = "deepseek-v4-flash";
+const char reasoningModelName[] = "deepseek-v4-pro";
 const char endpoint[] = "https://api.deepseek.com/chat/completions";
 }
 
@@ -82,12 +83,14 @@ void DeepSeekCoach::testConnection()
         if (networkOk) {
             const QJsonArray models = QJsonDocument::fromJson(body)
                                           .object().value("data").toArray();
+            bool fastFound = false;
+            bool reasoningFound = false;
             for (const QJsonValue &value : models) {
-                if (value.toObject().value("id").toString() == QString::fromLatin1(modelName)) {
-                    modelFound = true;
-                    break;
-                }
+                const QString id = value.toObject().value("id").toString();
+                fastFound = fastFound || id == QString::fromLatin1(fastModelName);
+                reasoningFound = reasoningFound || id == QString::fromLatin1(reasoningModelName);
             }
+            modelFound = fastFound && reasoningFound;
         }
 
         const bool success = networkOk && modelFound;
@@ -246,7 +249,8 @@ QByteArray DeepSeekCoach::makeRequestBody(const Request &request)
         u8"步数：%1\n实际走法：%2（%3）\n引擎推荐：%4（%5）\n"
         u8"最佳评分：%6\n实际评分：%7\n局面损失：%8\n错误等级：%9\n"
         u8"思考时间：%10 毫秒\n推荐变化：%11\n走棋前局面编码：%12\n"
-        u8"长期统计：累计对局 %13，已分析红方走法 %14，平均损失 %15，严重失误 %16。")
+        u8"长期统计：累计对局 %13，已分析红方走法 %14，平均损失 %15，严重失误 %16，"
+        u8"主动悔棋 %17 次，其中已确认明显/严重失误 %18 次。")
         .arg(analysis.ply)
         .arg(analysis.actualNotation, analysis.actualMove,
              analysis.bestNotation, analysis.bestMove)
@@ -260,10 +264,12 @@ QByteArray DeepSeekCoach::makeRequestBody(const Request &request)
         .arg(stats.games)
         .arg(stats.analyzedMoves)
         .arg(stats.averageLoss, 0, 'f', 1)
-        .arg(stats.blunders);
+        .arg(stats.blunders)
+        .arg(stats.undoEvents)
+        .arg(stats.blunderUndoEvents);
 
     QJsonObject body;
-    body["model"] = QString::fromLatin1(modelName);
+    body["model"] = QString::fromLatin1(fastModelName);
     body["stream"] = false;
     body["max_tokens"] = 700;
     body["temperature"] = 0.3;
@@ -295,28 +301,29 @@ QByteArray DeepSeekCoach::makeGameReviewRequestBody(
         u8"总手数：%4，红方走法：%5，已分析红方走法：%6\n"
         u8"本局平均损失：%7，明显失误：%8，严重失误：%9，红方平均思考：%10 秒\n\n"
         u8"各阶段表现：\n%11\n\n关键转折点（最多五个）：\n%12\n\n"
-        u8"本局悔棋证据：\n%13\n\n完整着法记录：\n%14\n\n"
-        u8"长期个人统计：完成对局 %15，分析走法 %16，平均损失 %17，"
-        u8"轻微失误 %18，明显失误 %19，严重失误 %20；累计悔棋 %21 次，"
-        u8"其中已确认的明显/严重失误 %22 次。")
+        u8"本局悔棋证据：\n%13\n\n当前动态画像（假设而非人格结论）：\n%14\n\n"
+        u8"完整着法记录：\n%15\n\n"
+        u8"长期个人统计：完成对局 %16，分析走法 %17，平均损失 %18，"
+        u8"轻微失误 %19，明显失误 %20，严重失误 %21；累计悔棋 %22 次，"
+        u8"其中已确认的明显/严重失误 %23 次。")
         .arg(context.gameId).arg(context.result).arg(context.endReason)
         .arg(context.totalMoves).arg(context.redMoves).arg(context.analyzedMoves)
         .arg(context.averageLoss, 0, 'f', 1)
         .arg(context.mistakes).arg(context.blunders)
         .arg(context.averageThinkingTimeMs / 1000.0, 0, 'f', 1)
         .arg(context.phaseSummary, context.keyMoments, context.undoSummary,
-             context.moveTranscript)
+             context.profileSummary, context.moveTranscript)
         .arg(stats.games).arg(stats.analyzedMoves)
         .arg(stats.averageLoss, 0, 'f', 1)
         .arg(stats.inaccuracies).arg(stats.mistakes).arg(stats.blunders)
         .arg(stats.undoEvents).arg(stats.blunderUndoEvents);
 
     QJsonObject body;
-    body["model"] = QString::fromLatin1(modelName);
+    body["model"] = QString::fromLatin1(reasoningModelName);
     body["stream"] = false;
     body["max_tokens"] = 1400;
-    body["temperature"] = 0.25;
-    body["thinking"] = QJsonObject{{"type", "disabled"}};
+    body["reasoning_effort"] = "high";
+    body["thinking"] = QJsonObject{{"type", "enabled"}};
     body["response_format"] = QJsonObject{{"type", "json_object"}};
     body["messages"] = QJsonArray{
         QJsonObject{{"role", "system"}, {"content", systemPrompt}},
@@ -375,7 +382,7 @@ bool DeepSeekCoach::parseCoachingContent(const QByteArray &body,
     result->gameId = request.analysis.gameId;
     result->ply = request.analysis.ply;
     result->actualMove = request.analysis.actualMove;
-    result->model = QString::fromLatin1(modelName);
+    result->model = QString::fromLatin1(fastModelName);
     result->diagnosis = diagnosis;
     result->evidence = evidence;
     result->trainingTask = trainingTask;
@@ -431,7 +438,7 @@ bool DeepSeekCoach::parseGameReviewContent(
 
     result->gameId = request.context.gameId;
     result->userId = request.context.userId;
-    result->model = QString::fromLatin1(modelName);
+    result->model = QString::fromLatin1(reasoningModelName);
     result->overview = overview;
     result->turningPoints = turningPoints;
     result->strengths = strengths;

@@ -4,6 +4,7 @@
 
 #include <QDateTime>
 #include <QDir>
+#include <QMap>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QStandardPaths>
@@ -123,6 +124,33 @@ bool GameDatabase::executeSchema(QString *errorMessage)
         "through_games INTEGER NOT NULL, summary TEXT NOT NULL, generated_at TEXT NOT NULL, "
         "UNIQUE(user_id, through_games), FOREIGN KEY(user_id) REFERENCES users(id))",
 
+        "CREATE TABLE IF NOT EXISTS diagnosis_tags ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, "
+        "game_id INTEGER NOT NULL, ply INTEGER NOT NULL, tag TEXT NOT NULL, "
+        "source TEXT NOT NULL, confidence REAL NOT NULL, evidence TEXT NOT NULL, "
+        "created_at TEXT NOT NULL, UNIQUE(game_id, ply, tag, source))",
+
+        "CREATE TABLE IF NOT EXISTS profile_snapshots ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, "
+        "through_games INTEGER NOT NULL, dimension TEXT NOT NULL, title TEXT NOT NULL, "
+        "score INTEGER NOT NULL, confidence REAL NOT NULL, status TEXT NOT NULL, "
+        "trend TEXT NOT NULL, evidence_count INTEGER NOT NULL, game_count INTEGER NOT NULL, "
+        "hypothesis TEXT NOT NULL, recommended_training TEXT NOT NULL, created_at TEXT NOT NULL, "
+        "UNIQUE(user_id, through_games, dimension))",
+
+        "CREATE TABLE IF NOT EXISTS training_plans ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, "
+        "through_games INTEGER NOT NULL, focus_dimension TEXT NOT NULL, "
+        "hypothesis TEXT NOT NULL, confidence REAL NOT NULL, status TEXT NOT NULL, "
+        "success_metric TEXT NOT NULL, review_after_games INTEGER NOT NULL, "
+        "created_at TEXT NOT NULL, UNIQUE(user_id, through_games))",
+
+        "CREATE TABLE IF NOT EXISTS training_plan_items ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, plan_id INTEGER NOT NULL, "
+        "diagnosis_tag TEXT NOT NULL, title TEXT NOT NULL, target_count INTEGER NOT NULL, "
+        "completed_count INTEGER NOT NULL DEFAULT 0, reason TEXT NOT NULL, "
+        "FOREIGN KEY(plan_id) REFERENCES training_plans(id))",
+
         "CREATE INDEX IF NOT EXISTS idx_moves_game ON moves(game_id, ply)",
         "CREATE INDEX IF NOT EXISTS idx_analyses_game ON analyses(game_id, ply)",
         "CREATE INDEX IF NOT EXISTS idx_game_reviews_game ON game_reviews(game_id)",
@@ -131,6 +159,9 @@ bool GameDatabase::executeSchema(QString *errorMessage)
         "CREATE INDEX IF NOT EXISTS idx_training_due ON training_positions(next_review_at, mastery)",
         "CREATE INDEX IF NOT EXISTS idx_training_attempts_position "
         "ON training_attempts(training_position_id)",
+        "CREATE INDEX IF NOT EXISTS idx_diagnosis_user ON diagnosis_tags(user_id, tag)",
+        "CREATE INDEX IF NOT EXISTS idx_profile_user ON profile_snapshots(user_id, through_games)",
+        "CREATE INDEX IF NOT EXISTS idx_plans_user ON training_plans(user_id, through_games)",
 
         // Repair records produced by the previous mate-score conversion.
         "UPDATE analyses SET actual_score = best_score, score_loss = 0, category = 'excellent' "
@@ -189,6 +220,33 @@ bool GameDatabase::executeSchema(QString *errorMessage)
             if (errorMessage) *errorMessage = migration.lastError().text();
             return false;
         }
+    }
+    auto ensureColumn = [this, errorMessage](const QString &table,
+                                              const QString &column,
+                                              const QString &definition) {
+        QSqlQuery info(database_);
+        if (!info.exec(QString("PRAGMA table_info(%1)").arg(table))) {
+            if (errorMessage) *errorMessage = info.lastError().text();
+            return false;
+        }
+        while (info.next()) {
+            if (info.value(1).toString() == column) return true;
+        }
+        QSqlQuery migration(database_);
+        if (!migration.exec(QString("ALTER TABLE %1 ADD COLUMN %2 %3")
+                                .arg(table, column, definition))) {
+            if (errorMessage) *errorMessage = migration.lastError().text();
+            return false;
+        }
+        return true;
+    };
+    if (!ensureColumn("training_positions", "diagnosis_tag",
+                      "TEXT NOT NULL DEFAULT 'unknown'")
+        || !ensureColumn("training_positions", "recommendation_reason",
+                         "TEXT NOT NULL DEFAULT ''")
+        || !ensureColumn("training_attempts", "hint_count",
+                         "INTEGER NOT NULL DEFAULT 0")) {
+        return false;
     }
     QSqlQuery index(database_);
     if (!index.exec("CREATE INDEX IF NOT EXISTS idx_games_user ON games(user_id, id)")) {
@@ -377,6 +435,31 @@ bool GameDatabase::buildGameReviewContext(qint64 gameId,
     }
     built.undoSummary = undoEvidence.isEmpty()
         ? QString::fromUtf8(u8"本局没有悔棋记录。") : undoEvidence.join('\n');
+
+    QSqlQuery profile(database_);
+    profile.prepare(
+        "SELECT title,score,confidence,status,trend,evidence_count,game_count,hypothesis "
+        "FROM profile_snapshots WHERE user_id=? AND evidence_count>0 "
+        "AND through_games=(SELECT MAX(through_games) FROM profile_snapshots WHERE user_id=?) "
+        "ORDER BY score ASC LIMIT 5");
+    profile.addBindValue(built.userId);
+    profile.addBindValue(built.userId);
+    if (!profile.exec()) {
+        if (errorMessage) *errorMessage = profile.lastError().text();
+        return false;
+    }
+    QStringList profileEvidence;
+    while (profile.next()) {
+        profileEvidence.push_back(QString::fromUtf8(
+            u8"%1：分数 %2，置信度 %3，状态 %4，趋势 %5；证据 %6 条/%7 盘；假设：%8")
+            .arg(profile.value(0).toString()).arg(profile.value(1).toInt())
+            .arg(profile.value(2).toDouble(), 0, 'f', 2)
+            .arg(profile.value(3).toString(), profile.value(4).toString())
+            .arg(profile.value(5).toInt()).arg(profile.value(6).toInt())
+            .arg(profile.value(7).toString()));
+    }
+    built.profileSummary = profileEvidence.isEmpty()
+        ? QString::fromUtf8(u8"当前画像证据不足。") : profileEvidence.join('\n');
     *context = built;
     return true;
 }
@@ -502,17 +585,25 @@ bool GameDatabase::setSelectedUserId(qint64 userId, QString *errorMessage)
 
 int GameDatabase::generateTrainingPositions(qint64 userId, QString *errorMessage)
 {
+    if (!rebuildPersonalization(userId, errorMessage)) {
+        return -1;
+    }
     QSqlQuery query(database_);
     query.prepare(
         "INSERT OR IGNORE INTO training_positions("
         "source_game_id, source_ply, board, best_move, actual_move, score_loss, category, "
-        "principal_variation, theme, mastery, next_review_at, created_at) "
+        "principal_variation, theme, diagnosis_tag, recommendation_reason, "
+        "mastery, next_review_at, created_at) "
         "SELECT a.game_id, a.ply, m.board_before, a.best_move, a.actual_move, "
         "a.score_loss, a.category, a.principal_variation, "
         "CASE WHEN a.best_score > 90000 THEN '寻找将杀' "
         "WHEN a.score_loss > 200 THEN '防止严重失误' "
         "WHEN a.score_loss > 80 THEN '候选着比较' "
-        "ELSE '局面优化' END, 0, ?, ? "
+        "ELSE '局面优化' END, "
+        "COALESCE((SELECT dt.tag FROM diagnosis_tags dt "
+        "WHERE dt.game_id=a.game_id AND dt.ply=a.ply "
+        "ORDER BY dt.confidence DESC, dt.id LIMIT 1),'unknown'), "
+        "'来自用户真实对局，并与当前画像重点相关', 0, ?, ? "
         "FROM analyses a JOIN moves m ON m.game_id = a.game_id AND m.ply = a.ply "
         "JOIN games g ON g.id = a.game_id "
         "WHERE g.user_id = ? AND m.side = 'red' "
@@ -538,14 +629,19 @@ QVector<GameDatabase::TrainingPosition> GameDatabase::dueTrainingPositions(qint6
     query.prepare(
         "SELECT p.id, p.source_game_id, p.source_ply, p.board, p.best_move, "
         "p.actual_move, p.score_loss, p.category, p.principal_variation, p.theme, "
-        "p.mastery, COUNT(t.id), COALESCE(SUM(t.correct), 0) "
+        "p.diagnosis_tag, p.recommendation_reason, p.mastery, "
+        "COUNT(t.id), COALESCE(SUM(t.correct), 0) "
         "FROM training_positions p JOIN games g ON g.id = p.source_game_id "
         "LEFT JOIN training_attempts t "
         "ON t.training_position_id = p.id "
         "WHERE g.user_id = ? AND (p.next_review_at IS NULL OR p.next_review_at <= ?) "
-        "GROUP BY p.id ORDER BY p.mastery ASC, p.score_loss DESC, p.id ASC LIMIT ?");
+        "GROUP BY p.id ORDER BY "
+        "CASE WHEN p.diagnosis_tag=COALESCE((SELECT focus_dimension FROM training_plans "
+        "WHERE user_id=? ORDER BY through_games DESC, id DESC LIMIT 1),'') THEN 0 ELSE 1 END, "
+        "p.mastery ASC, p.score_loss DESC, p.id ASC LIMIT ?");
     query.addBindValue(userId);
     query.addBindValue(QDateTime::currentDateTime().toString(Qt::ISODateWithMs));
+    query.addBindValue(userId);
     query.addBindValue(std::max(1, limit));
     if (!query.exec()) {
         return positions;
@@ -562,9 +658,11 @@ QVector<GameDatabase::TrainingPosition> GameDatabase::dueTrainingPositions(qint6
         position.category = query.value(7).toString();
         position.principalVariation = query.value(8).toString();
         position.theme = query.value(9).toString();
-        position.mastery = query.value(10).toInt();
-        position.attempts = query.value(11).toInt();
-        position.correctAttempts = query.value(12).toInt();
+        position.diagnosisTag = query.value(10).toString();
+        position.recommendationReason = query.value(11).toString();
+        position.mastery = query.value(12).toInt();
+        position.attempts = query.value(13).toInt();
+        position.correctAttempts = query.value(14).toInt();
         positions.push_back(position);
     }
     return positions;
@@ -576,6 +674,17 @@ bool GameDatabase::recordTrainingAttempt(qint64 positionId,
                                          qint64 thinkingTimeMs,
                                          QString *errorMessage)
 {
+    return recordTrainingAttempt(positionId, attemptedMove, correct, thinkingTimeMs,
+                                 0, errorMessage);
+}
+
+bool GameDatabase::recordTrainingAttempt(qint64 positionId,
+                                         const QString &attemptedMove,
+                                         bool correct,
+                                         qint64 thinkingTimeMs,
+                                         int hintCount,
+                                         QString *errorMessage)
+{
     if (!database_.transaction()) {
         if (errorMessage) *errorMessage = database_.lastError().text();
         return false;
@@ -585,11 +694,12 @@ bool GameDatabase::recordTrainingAttempt(qint64 positionId,
     QSqlQuery insert(database_);
     insert.prepare(
         "INSERT INTO training_attempts(training_position_id, attempted_move, correct, "
-        "thinking_time_ms, attempted_at) VALUES(?, ?, ?, ?, ?)");
+        "thinking_time_ms, hint_count, attempted_at) VALUES(?, ?, ?, ?, ?, ?)");
     insert.addBindValue(positionId);
     insert.addBindValue(attemptedMove);
     insert.addBindValue(correct ? 1 : 0);
     insert.addBindValue(std::max<qint64>(0, thinkingTimeMs));
+    insert.addBindValue(std::max(0, hintCount));
     insert.addBindValue(now);
     if (!insert.exec()) {
         database_.rollback();
@@ -606,7 +716,7 @@ bool GameDatabase::recordTrainingAttempt(qint64 positionId,
         return false;
     }
     const int oldMastery = masteryQuery.value(0).toInt();
-    const int newMastery = correct ? std::min(5, oldMastery + 1)
+    const int newMastery = correct && hintCount < 3 ? std::min(5, oldMastery + 1)
                                    : std::max(0, oldMastery - 1);
     int reviewDays = 0;
     if (correct) {
@@ -1126,6 +1236,13 @@ GameDatabase::ProfileReport GameDatabase::generateMilestoneReport(
         .arg(milestone).arg(wins).arg(losses).arg(draws).arg(analyzed)
         .arg(averageLoss, 0, 'f', 1).arg(mistakes).arg(blunders)
         .arg(averageTime / 1000.0, 0, 'f', 1).arg(accuracy, 0, 'f', 1).arg(advice);
+    const TrainingPlan plan = currentTrainingPlan(userId);
+    if (plan.id >= 0) {
+        report.summary += QString::fromUtf8(
+            u8"\n\n当前画像诊断假设：%1（置信度 %2）。\n检验标准：%3")
+            .arg(plan.hypothesis).arg(plan.confidence, 0, 'f', 2)
+            .arg(plan.successMetric);
+    }
 
     QSqlQuery insert(database_);
     insert.prepare("INSERT INTO profile_reports(user_id, through_games, summary, generated_at) "
@@ -1263,6 +1380,333 @@ QVector<GameDatabase::RecordedMove> GameDatabase::recordedMoves(qint64 gameId) c
         moves.push_back(move);
     }
     return moves;
+}
+
+bool GameDatabase::rebuildPersonalization(qint64 userId, QString *errorMessage)
+{
+    if (!database_.transaction()) {
+        if (errorMessage) *errorMessage = database_.lastError().text();
+        return false;
+    }
+    auto fail = [this, errorMessage](const QSqlQuery &query) {
+        database_.rollback();
+        if (errorMessage) *errorMessage = query.lastError().text();
+        return false;
+    };
+
+    QSqlQuery clear(database_);
+    clear.prepare("DELETE FROM diagnosis_tags WHERE user_id=? "
+                  "AND source IN ('local_rule','undo_behavior')");
+    clear.addBindValue(userId);
+    if (!clear.exec()) return fail(clear);
+
+    struct Rule {
+        const char *tag;
+        const char *condition;
+        double confidence;
+        const char *evidence;
+    };
+    const Rule rules[] = {
+        {"missed_mate", "a.best_score>90000 AND a.actual_score<=90000", 0.95,
+         "引擎在落子前发现强制杀法，但实际着没有保持该结果"},
+        {"time_management", "a.score_loss>80 AND m.thinking_time_ms<3000", 0.82,
+         "明显损失发生在思考时间少于三秒时"},
+        {"poor_development", "a.score_loss>80 AND a.ply<=20", 0.70,
+         "开局二十步内出现明显局面损失"},
+        {"endgame_technique", "a.score_loss>80 AND a.ply>60", 0.72,
+         "六十步后的残局阶段出现明显局面损失"},
+        {"missed_threat", "a.score_loss>150 AND a.actual_score < -300", 0.68,
+         "落子后评价进入明显劣势，可能遗漏了对方的直接威胁"},
+        {"calculation_depth", "a.score_loss>200", 0.75,
+         "实际着与最佳着差距超过二百分，需要检查连续计算"},
+        {"candidate_moves", "a.score_loss>80", 0.72,
+         "实际着与候选最佳着存在明显差距，需要比较至少两个候选着"}
+    };
+    const QString now = QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
+    for (const Rule &rule : rules) {
+        QSqlQuery insert(database_);
+        insert.prepare(QString(
+            "INSERT OR IGNORE INTO diagnosis_tags(user_id,game_id,ply,tag,source,"
+            "confidence,evidence,created_at) "
+            "SELECT g.user_id,a.game_id,a.ply,?,'local_rule',?,?,? "
+            "FROM analyses a JOIN moves m ON m.game_id=a.game_id AND m.ply=a.ply "
+            "JOIN games g ON g.id=a.game_id WHERE g.user_id=? AND m.side='red' AND %1")
+            .arg(QString::fromLatin1(rule.condition)));
+        insert.addBindValue(QString::fromLatin1(rule.tag));
+        insert.addBindValue(rule.confidence);
+        insert.addBindValue(QString::fromUtf8(rule.evidence));
+        insert.addBindValue(now);
+        insert.addBindValue(userId);
+        if (!insert.exec()) return fail(insert);
+    }
+
+    QSqlQuery undoTags(database_);
+    undoTags.prepare(
+        "INSERT OR IGNORE INTO diagnosis_tags(user_id,game_id,ply,tag,source,confidence,"
+        "evidence,created_at) SELECT user_id,game_id,red_move_ply,'candidate_moves',"
+        "'undo_behavior',0.88,'用户落子后主动撤回，说明问题是在落子后才被察觉',? "
+        "FROM undo_events WHERE user_id=?");
+    undoTags.addBindValue(now);
+    undoTags.addBindValue(userId);
+    if (!undoTags.exec()) return fail(undoTags);
+
+    QSqlQuery updatePositions(database_);
+    updatePositions.prepare(
+        "UPDATE training_positions SET diagnosis_tag=COALESCE((SELECT dt.tag "
+        "FROM diagnosis_tags dt WHERE dt.game_id=training_positions.source_game_id "
+        "AND dt.ply=training_positions.source_ply "
+        "ORDER BY dt.confidence DESC,dt.id LIMIT 1),'unknown'), "
+        "recommendation_reason='来自用户真实对局；系统依据重复错误标签和当前画像安排' "
+        "WHERE source_game_id IN (SELECT id FROM games WHERE user_id=?)");
+    updatePositions.addBindValue(userId);
+    if (!updatePositions.exec()) return fail(updatePositions);
+
+    int completedGames = 0;
+    int analyzedMoves = 0;
+    QSqlQuery totals(database_);
+    totals.prepare(
+        "SELECT (SELECT COUNT(*) FROM games WHERE user_id=? "
+        "AND result NOT IN ('ongoing','abandoned')), "
+        "(SELECT COUNT(*) FROM analyses a JOIN moves m ON m.game_id=a.game_id AND m.ply=a.ply "
+        "JOIN games g ON g.id=a.game_id WHERE g.user_id=? AND m.side='red')");
+    totals.addBindValue(userId);
+    totals.addBindValue(userId);
+    if (!totals.exec() || !totals.next()) return fail(totals);
+    completedGames = totals.value(0).toInt();
+    analyzedMoves = totals.value(1).toInt();
+
+    QMap<QString, QStringList> definitions;
+    definitions["candidate_moves"] = {QString::fromUtf8(u8"候选着选择"),
+        QString::fromUtf8(u8"比较候选着的流程可能不稳定"),
+        QString::fromUtf8(u8"每题先写出至少两个候选着，再比较对方最强回应")};
+    definitions["time_management"] = {QString::fromUtf8(u8"时间管理"),
+        QString::fromUtf8(u8"复杂局面中可能过快落子"),
+        QString::fromUtf8(u8"明显变化出现时强制执行三秒检查表")};
+    definitions["missed_mate"] = {QString::fromUtf8(u8"将杀识别"),
+        QString::fromUtf8(u8"强制将杀的搜索可能不完整"),
+        QString::fromUtf8(u8"练习寻找连续将军和最短杀法")};
+    definitions["missed_threat"] = {QString::fromUtf8(u8"威胁识别"),
+        QString::fromUtf8(u8"对方直接威胁检查可能不稳定"),
+        QString::fromUtf8(u8"落子前依次检查对方将军、吃子和直接威胁")};
+    definitions["calculation_depth"] = {QString::fromUtf8(u8"战术计算"),
+        QString::fromUtf8(u8"连续计算深度可能不足"),
+        QString::fromUtf8(u8"计算三步强制变化，并写出对方最强回应")};
+    definitions["poor_development"] = {QString::fromUtf8(u8"开局出子"),
+        QString::fromUtf8(u8"开局出子效率有待验证"),
+        QString::fromUtf8(u8"复查二十步内的重复走子和未出动子力")};
+    definitions["endgame_technique"] = {QString::fromUtf8(u8"残局能力"),
+        QString::fromUtf8(u8"残局决策稳定性有待提高"),
+        QString::fromUtf8(u8"按主题重复训练本人的残局失误局面")};
+
+    QSqlQuery clearSnapshot(database_);
+    clearSnapshot.prepare("DELETE FROM profile_snapshots WHERE user_id=? AND through_games=?");
+    clearSnapshot.addBindValue(userId);
+    clearSnapshot.addBindValue(completedGames);
+    if (!clearSnapshot.exec()) return fail(clearSnapshot);
+
+    for (auto it = definitions.cbegin(); it != definitions.cend(); ++it) {
+        QSqlQuery evidence(database_);
+        evidence.prepare(
+            "SELECT COUNT(*), COUNT(DISTINCT game_id), "
+            "COALESCE(SUM(CASE WHEN game_id IN (SELECT id FROM games WHERE user_id=? "
+            "ORDER BY id DESC LIMIT 5) THEN 1 ELSE 0 END),0), "
+            "COALESCE(SUM(CASE WHEN game_id IN (SELECT id FROM games WHERE user_id=? "
+            "ORDER BY id DESC LIMIT 5 OFFSET 5) THEN 1 ELSE 0 END),0) "
+            "FROM diagnosis_tags WHERE user_id=? AND tag=?");
+        evidence.addBindValue(userId);
+        evidence.addBindValue(userId);
+        evidence.addBindValue(userId);
+        evidence.addBindValue(it.key());
+        if (!evidence.exec() || !evidence.next()) return fail(evidence);
+        const int evidenceCount = evidence.value(0).toInt();
+        const int gameCount = evidence.value(1).toInt();
+        const int recent = evidence.value(2).toInt();
+        const int previous = evidence.value(3).toInt();
+        const double rate = static_cast<double>(evidenceCount) / std::max(10, analyzedMoves);
+        const int score = std::clamp(qRound(100.0 - std::min(75.0, rate * 400.0)), 10, 100);
+        const double confidence = evidenceCount == 0 ? 0.0
+            : std::min(0.95, 0.20 + gameCount * 0.15 + evidenceCount * 0.08);
+        QString status = "insufficient_data";
+        if (evidenceCount == 1) status = "isolated";
+        else if (gameCount >= 2) status = recent >= 3 ? "stable_weakness" : "needs_verification";
+        QString trend = "stable";
+        if (previous > 0 && recent + 1 < previous) trend = "improving";
+        else if (recent > previous + 1) trend = "worsening";
+
+        QSqlQuery snapshot(database_);
+        snapshot.prepare(
+            "INSERT INTO profile_snapshots(user_id,through_games,dimension,title,score,"
+            "confidence,status,trend,evidence_count,game_count,hypothesis,"
+            "recommended_training,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)");
+        snapshot.addBindValue(userId);
+        snapshot.addBindValue(completedGames);
+        snapshot.addBindValue(it.key());
+        snapshot.addBindValue(it.value()[0]);
+        snapshot.addBindValue(score);
+        snapshot.addBindValue(confidence);
+        snapshot.addBindValue(status);
+        snapshot.addBindValue(trend);
+        snapshot.addBindValue(evidenceCount);
+        snapshot.addBindValue(gameCount);
+        snapshot.addBindValue(it.value()[1]);
+        snapshot.addBindValue(it.value()[2]);
+        snapshot.addBindValue(now);
+        if (!snapshot.exec()) return fail(snapshot);
+    }
+
+    QSqlQuery planCheck(database_);
+    planCheck.prepare("SELECT id FROM training_plans WHERE user_id=? AND through_games=?");
+    planCheck.addBindValue(userId);
+    planCheck.addBindValue(completedGames);
+    if (!planCheck.exec()) return fail(planCheck);
+    const bool planAtCurrentMilestone = planCheck.next();
+    QSqlQuery anyPlan(database_);
+    anyPlan.prepare("SELECT 1 FROM training_plans WHERE user_id=? LIMIT 1");
+    anyPlan.addBindValue(userId);
+    if (!anyPlan.exec()) return fail(anyPlan);
+    const bool hasAnyPlan = anyPlan.next();
+    if (!planAtCurrentMilestone && (!hasAnyPlan || (completedGames > 0 && completedGames % 10 == 0))) {
+        QSqlQuery priority(database_);
+        priority.prepare(
+            "SELECT dimension,hypothesis,confidence,status,evidence_count,game_count,title,"
+            "recommended_training FROM profile_snapshots WHERE user_id=? AND through_games=? "
+            "AND evidence_count>0 ORDER BY score ASC, confidence DESC LIMIT 1");
+        priority.addBindValue(userId);
+        priority.addBindValue(completedGames);
+        if (!priority.exec()) return fail(priority);
+        if (priority.next()) {
+        const QString focus = priority.value(0).toString();
+        const QString hypothesis = priority.value(1).toString();
+        const double confidence = priority.value(2).toDouble();
+        const QString status = priority.value(3).toString();
+        const int evidenceCount = priority.value(4).toInt();
+        const int gameCount = priority.value(5).toInt();
+        const QString title = priority.value(6).toString();
+        const QString exercise = priority.value(7).toString();
+        QSqlQuery plan(database_);
+        plan.prepare(
+            "INSERT INTO training_plans(user_id,through_games,focus_dimension,hypothesis,"
+            "confidence,status,success_metric,review_after_games,created_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?)");
+        plan.addBindValue(userId);
+        plan.addBindValue(completedGames);
+        plan.addBindValue(focus);
+        plan.addBindValue(hypothesis);
+        plan.addBindValue(confidence);
+        plan.addBindValue(status);
+        plan.addBindValue(QString::fromUtf8(
+            u8"未来五盘同类错误比当前阶段减少 30%，专项训练正确率达到 70%"));
+        plan.addBindValue(5);
+        plan.addBindValue(now);
+        if (!plan.exec()) return fail(plan);
+        const qint64 planId = plan.lastInsertId().toLongLong();
+        const QString reason = QString::fromUtf8(
+            u8"画像证据 %1 条，来自 %2 盘；当前置信度 %3")
+            .arg(evidenceCount).arg(gameCount).arg(confidence, 0, 'f', 2);
+        const QVector<QStringList> items = {
+            {focus, QString::fromUtf8(u8"个人历史错局：") + title, "6", reason},
+            {"__checklist__", exercise, "3", QString::fromUtf8(u8"独立答对且不使用提示，建立可重复的落子前检查流程")},
+            {"__transfer__", QString::fromUtf8(u8"后续五盘实战迁移检查"), "5",
+             QString::fromUtf8(u8"验证训练是否迁移到后续真实对局")}
+        };
+        for (const QStringList &item : items) {
+            QSqlQuery itemInsert(database_);
+            itemInsert.prepare(
+                "INSERT INTO training_plan_items(plan_id,diagnosis_tag,title,target_count,reason) "
+                "VALUES(?,?,?,?,?)");
+            itemInsert.addBindValue(planId);
+            itemInsert.addBindValue(item[0]);
+            itemInsert.addBindValue(item[1]);
+            itemInsert.addBindValue(item[2].toInt());
+            itemInsert.addBindValue(item[3]);
+            if (!itemInsert.exec()) return fail(itemInsert);
+        }
+        }
+    }
+
+    if (!database_.commit()) {
+        database_.rollback();
+        if (errorMessage) *errorMessage = database_.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+QVector<GameDatabase::ProfileDimension> GameDatabase::profileDimensions(qint64 userId) const
+{
+    QVector<ProfileDimension> dimensions;
+    QSqlQuery query(database_);
+    query.prepare(
+        "SELECT dimension,title,score,confidence,status,trend,evidence_count,game_count,"
+        "hypothesis,recommended_training FROM profile_snapshots WHERE user_id=? "
+        "AND through_games=(SELECT MAX(through_games) FROM profile_snapshots WHERE user_id=?) "
+        "ORDER BY CASE WHEN evidence_count=0 THEN 1 ELSE 0 END, score ASC");
+    query.addBindValue(userId);
+    query.addBindValue(userId);
+    if (!query.exec()) return dimensions;
+    while (query.next()) {
+        dimensions.push_back(ProfileDimension{
+            query.value(0).toString(), query.value(1).toString(), query.value(2).toInt(),
+            query.value(3).toDouble(), query.value(4).toString(), query.value(5).toString(),
+            query.value(6).toInt(), query.value(7).toInt(), query.value(8).toString(),
+            query.value(9).toString()});
+    }
+    return dimensions;
+}
+
+GameDatabase::TrainingPlan GameDatabase::currentTrainingPlan(qint64 userId) const
+{
+    TrainingPlan result;
+    QSqlQuery plan(database_);
+    plan.prepare(
+        "SELECT id,user_id,through_games,focus_dimension,hypothesis,confidence,status,"
+        "success_metric,review_after_games,created_at FROM training_plans "
+        "WHERE user_id=? ORDER BY through_games DESC,id DESC LIMIT 1");
+    plan.addBindValue(userId);
+    if (!plan.exec() || !plan.next()) return result;
+    result.id = plan.value(0).toLongLong();
+    result.userId = plan.value(1).toLongLong();
+    result.throughGames = plan.value(2).toInt();
+    result.focusDimension = plan.value(3).toString();
+    result.hypothesis = plan.value(4).toString();
+    result.confidence = plan.value(5).toDouble();
+    result.status = plan.value(6).toString();
+    result.successMetric = plan.value(7).toString();
+    result.reviewAfterGames = plan.value(8).toInt();
+    result.createdAt = plan.value(9).toString();
+
+    QSqlQuery items(database_);
+    items.prepare(
+        "SELECT i.id,i.diagnosis_tag,i.title,i.target_count,"
+        "CASE WHEN i.diagnosis_tag='__transfer__' THEN "
+        "(SELECT COUNT(*) FROM games g WHERE g.user_id=? AND g.finished_at>=? "
+        "AND g.result NOT IN ('ongoing','abandoned')) "
+        "WHEN i.diagnosis_tag='__checklist__' THEN "
+        "(SELECT COUNT(*) FROM training_attempts a JOIN training_positions p "
+        "ON p.id=a.training_position_id WHERE p.source_game_id IN "
+        "(SELECT id FROM games WHERE user_id=?) AND a.attempted_at>=? "
+        "AND a.correct=1 AND a.hint_count=0) ELSE "
+        "(SELECT COUNT(*) FROM training_attempts a JOIN training_positions p "
+        "ON p.id=a.training_position_id WHERE p.diagnosis_tag=i.diagnosis_tag "
+        "AND p.source_game_id IN (SELECT id FROM games WHERE user_id=?) "
+        "AND a.attempted_at>=?) END,i.reason FROM training_plan_items i "
+        "WHERE i.plan_id=? ORDER BY i.id");
+    items.addBindValue(userId);
+    items.addBindValue(result.createdAt);
+    items.addBindValue(userId);
+    items.addBindValue(result.createdAt);
+    items.addBindValue(userId);
+    items.addBindValue(result.createdAt);
+    items.addBindValue(result.id);
+    if (items.exec()) {
+        while (items.next()) {
+            result.items.push_back(TrainingPlanItem{
+                items.value(0).toLongLong(), items.value(1).toString(),
+                items.value(2).toString(), items.value(3).toInt(),
+                items.value(4).toInt(), items.value(5).toString()});
+        }
+    }
+    return result;
 }
 
 QString GameDatabase::databasePath() const

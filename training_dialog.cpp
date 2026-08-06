@@ -1,6 +1,9 @@
 #include "training_dialog.h"
 
 #include "xiangqi_board_widget.h"
+#include "pikafish_analyzer.h"
+
+#include <algorithm>
 
 #include <QFrame>
 #include <QHBoxLayout>
@@ -150,10 +153,12 @@ void TrainingDialog::loadCurrentPosition()
         .arg(position.sourceGameId)
         .arg(position.sourcePly)
         .arg(position.scoreLoss)
-        .arg(position.attempts));
+        .arg(position.attempts)
+        + QString::fromUtf8(u8"\n推荐原因：") + position.recommendationReason);
     result_browser_->clear();
     hint_button_->setEnabled(true);
     next_button_->setEnabled(false);
+    hint_count_ = 0;
     if (!board_->loadTrainingPosition(position.board.toStdString())) {
         result_browser_->setText(QString::fromUtf8(u8"无法加载这道训练题的局面。"));
         board_->setEnabled(false);
@@ -173,7 +178,7 @@ void TrainingDialog::handleMove(const QString &uciMove)
     const bool correct = uciMove == position.bestMove;
     QString error;
     if (!database_->recordTrainingAttempt(position.id, uciMove, correct,
-                                           timer_.elapsed(), &error)) {
+                                           timer_.elapsed(), hint_count_, &error)) {
         QMessageBox::warning(this, QString::fromUtf8(u8"保存训练结果失败"), error);
     }
 
@@ -192,7 +197,10 @@ void TrainingDialog::handleMove(const QString &uciMove)
                  displayMove(position.actualMove).toHtmlEscaped(),
                  position.principalVariation.toHtmlEscaped(),
                  correct
-                     ? QString::fromUtf8(u8"这道题将进入间隔复习计划。")
+                     ? (hint_count_ == 0
+                            ? QString::fromUtf8(u8"独立答对：掌握度上升，并进入间隔复习计划。")
+                            : QString::fromUtf8(u8"借助 %1 级提示答对：系统已记录提示依赖，并会更早安排复测。")
+                                  .arg(hint_count_))
                      : QString::fromUtf8(u8"建议比较目标着与实战走法，检查自己遗漏了什么强制手段。")));
     hint_button_->setEnabled(false);
     next_button_->setEnabled(true);
@@ -203,10 +211,33 @@ void TrainingDialog::showHint()
     if (current_index_ < 0 || current_index_ >= positions_.size()) {
         return;
     }
-    const QString bestMove = positions_[current_index_].bestMove;
-    result_browser_->setHtml(QString::fromUtf8(
-        u8"<p><b>提示：</b>请重点考虑从 <b>%1</b> 出发的棋子，先检查将军、吃子和直接威胁。</p>")
-        .arg(bestMove.left(2).toHtmlEscaped()));
+    const auto &position = positions_[current_index_];
+    hint_count_ = std::min(3, hint_count_ + 1);
+    QString hint;
+    if (hint_count_ == 1) {
+        if (position.diagnosisTag == "missed_mate") {
+            hint = QString::fromUtf8(u8"方向提示：先列出所有将军手段，寻找对方无法化解的连续变化。");
+        } else if (position.diagnosisTag == "missed_threat") {
+            hint = QString::fromUtf8(u8"方向提示：先不要考虑自己的计划，检查对方下一步的将军、吃子和直接威胁。");
+        } else {
+            hint = QString::fromUtf8(u8"方向提示：写出至少两个候选着，并分别寻找对方最强回应。");
+        }
+    } else if (hint_count_ == 2) {
+        hint = QString::fromUtf8(u8"局部提示：重点考虑从 <b>%1</b> 出发的棋子。").arg(
+            position.bestMove.left(2).toHtmlEscaped());
+    } else {
+        const QString notation = PikafishAnalyzer::toChineseNotation(
+            position.board.toStdString(), XiangqiGame::Side::Red, position.bestMove);
+        const QString variation = PikafishAnalyzer::toChinesePrincipalVariation(
+            position.board.toStdString(), XiangqiGame::Side::Red,
+            position.principalVariation);
+        hint = QString::fromUtf8(
+            u8"计算提示：推荐着是 <b>%1</b>；关键变化为：%2。请先解释为什么，再落子。").arg(
+            notation.toHtmlEscaped(), variation.toHtmlEscaped());
+    }
+    result_browser_->setHtml(QString::fromUtf8(u8"<h3>第 %1 级提示</h3><p>%2</p>")
+                                 .arg(hint_count_).arg(hint));
+    if (hint_count_ >= 3) hint_button_->setEnabled(false);
 }
 
 void TrainingDialog::nextPosition()

@@ -116,14 +116,26 @@ int main(int argc, char *argv[])
     }
     const auto aliceTraining = database.dueTrainingPositions(alice, 5);
     const auto bobTraining = database.dueTrainingPositions(bob, 5);
-    if (aliceTraining.isEmpty() || !bobTraining.isEmpty()) {
+    const auto dimensions = database.profileDimensions(alice);
+    const auto planBeforeTraining = database.currentTrainingPlan(alice);
+    if (aliceTraining.isEmpty() || !bobTraining.isEmpty()
+        || aliceTraining.front().diagnosisTag == "unknown"
+        || aliceTraining.front().recommendationReason.isEmpty()
+        || dimensions.isEmpty() || dimensions.front().evidenceCount < 1
+        || planBeforeTraining.id < 0 || planBeforeTraining.items.size() != 3
+        || database.currentTrainingPlan(bob).id >= 0) {
         return 11;
     }
     if (!database.recordTrainingAttempt(aliceTraining.front().id,
                                         aliceTraining.front().bestMove,
-                                        true, 2100, &error) ||
+                                        true, 2100, 2, &error) ||
         database.trainingSummary(alice).attempts != 1 ||
         database.trainingSummary(bob).attempts != 0) {
+        return 12;
+    }
+    const auto planAfterTraining = database.currentTrainingPlan(alice);
+    if (planAfterTraining.items.isEmpty()
+        || planAfterTraining.items.front().completedCount < 1) {
         return 12;
     }
     if (!database.finishGame(trainingGame, XiangqiGame::GameResult::BlackWins,

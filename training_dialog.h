@@ -32,6 +32,7 @@ private:
     QPushButton *next_button_ = nullptr;
     QVector<GameDatabase::TrainingPosition> positions_;
     int current_index_ = -1;
+    int hint_count_ = 0;
     QElapsedTimer timer_;
 
     void loadSession();

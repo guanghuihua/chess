@@ -350,6 +350,7 @@ void MainWindow::handleGameEnded()
         return;
     }
     pending_game_reviews_.insert(current_game_id_);
+    database_.generateTrainingPositions(active_user_id_);
     if (ai_advice_browser_) {
         const QString progress = coach_ && coach_->isConfigured()
             ? QString::fromUtf8(u8"正在等待引擎完成剩余分析，然后生成整盘 AI 建议……")
@@ -377,6 +378,7 @@ void MainWindow::handleAnalysis(const PikafishAnalyzer::AnalysisResult &result)
                                   result.principalVariation, &error)) {
         engine_status_label_->setText(QString::fromUtf8(u8"保存分析失败：") + error);
     }
+    database_.generateTrainingPositions(active_user_id_);
 
     QString categoryText;
     QString color;
@@ -834,6 +836,12 @@ void MainWindow::configureDeepSeek()
 
 void MainWindow::refreshStats()
 {
+    QString personalizationError;
+    if (!database_.rebuildPersonalization(active_user_id_, &personalizationError)
+        && engine_status_label_) {
+        engine_status_label_->setText(QString::fromUtf8(u8"更新动态画像失败：")
+                                      + personalizationError);
+    }
     const GameDatabase::TrainingStats stats = database_.trainingStats(active_user_id_);
     const GameDatabase::TrainingSummary training = database_.trainingSummary(active_user_id_);
     const GameDatabase::UserProfile profile = database_.userProfile(active_user_id_);
@@ -844,6 +852,47 @@ void MainWindow::refreshStats()
         latestReport = reports.front().summary.toHtmlEscaped();
         latestReport.replace("\n", "<br>");
     }
+    auto statusText = [](const QString &status) {
+        if (status == "isolated") return QString::fromUtf8(u8"偶发现象");
+        if (status == "needs_verification") return QString::fromUtf8(u8"待验证问题");
+        if (status == "stable_weakness") return QString::fromUtf8(u8"较稳定弱点");
+        return QString::fromUtf8(u8"证据不足");
+    };
+    auto trendText = [](const QString &trend) {
+        if (trend == "improving") return QString::fromUtf8(u8"正在改善");
+        if (trend == "worsening") return QString::fromUtf8(u8"近期增加");
+        return QString::fromUtf8(u8"基本稳定");
+    };
+    QString dimensionHtml;
+    const auto dimensions = database_.profileDimensions(active_user_id_);
+    for (const auto &dimension : dimensions) {
+        if (dimension.evidenceCount == 0) continue;
+        dimensionHtml += QString::fromUtf8(
+            u8"<tr><td><b>%1</b></td><td>%2</td><td>%3</td><td>%4</td>"
+            u8"<td>%5 条 / %6 盘</td></tr>")
+            .arg(dimension.title.toHtmlEscaped()).arg(dimension.score)
+            .arg(dimension.confidence, 0, 'f', 2)
+            .arg(statusText(dimension.status) + QString::fromUtf8(u8" · ")
+                 + trendText(dimension.trend))
+            .arg(dimension.evidenceCount).arg(dimension.gameCount);
+    }
+    if (dimensionHtml.isEmpty()) {
+        dimensionHtml = QString::fromUtf8(u8"<tr><td colspan='5'>证据不足，继续完成有效对局后更新。</td></tr>");
+    }
+    const auto plan = database_.currentTrainingPlan(active_user_id_);
+    QString planHtml = QString::fromUtf8(u8"尚未形成阶段训练计划。");
+    if (plan.id >= 0) {
+        QString items;
+        for (const auto &item : plan.items) {
+            items += QString::fromUtf8(u8"<li><b>%1</b>（%2 / %3）<br><small>%4</small></li>")
+                .arg(item.title.toHtmlEscaped()).arg(item.completedCount)
+                .arg(item.targetCount).arg(item.reason.toHtmlEscaped());
+        }
+        planHtml = QString::fromUtf8(
+            u8"<b>诊断假设：</b>%1（置信度 %2）<br><b>验证标准：</b>%3<ul>%4</ul>")
+            .arg(plan.hypothesis.toHtmlEscaped()).arg(plan.confidence, 0, 'f', 2)
+            .arg(plan.successMetric.toHtmlEscaped(), items);
+    }
     const QString userName = user_combo_ ? user_combo_->currentText() : QString();
     profile_dashboard_->setProfileData(
         userName, profile, stats, training,
@@ -851,14 +900,18 @@ void MainWindow::refreshStats()
     stats_browser_->setHtml(QString::fromUtf8(
         u8"<h3>%1 的训练说明</h3>"
         u8"<b>当前训练重点</b><br>%2<br><br>"
-        u8"个人错题：%3　今日到期：%4　AI讲解：%5<hr>"
-        u8"<b>最近阶段总结</b><br>%6")
+        u8"个人错题：%3　今日到期：%4　AI讲解：%5　悔棋证据：%6<hr>"
+        u8"<h3>动态能力画像</h3><table cellspacing='6'>"
+        u8"<tr><th>维度</th><th>分数</th><th>置信度</th><th>状态/趋势</th><th>证据</th></tr>%7</table><hr>"
+        u8"<h3>当前阶段训练计划</h3>%8<hr>"
+        u8"<b>最近阶段总结</b><br>%9")
         .arg(userName.toHtmlEscaped(),
              profile.mainWeakness.toHtmlEscaped())
         .arg(training.positions)
         .arg(training.due)
         .arg(stats.coachedMoves)
-        .arg(latestReport));
+        .arg(stats.undoEvents)
+        .arg(dimensionHtml, planHtml, latestReport));
 }
 
 bool MainWindow::isCurrentMove(qint64 gameId, int ply, const QString &uciMove) const

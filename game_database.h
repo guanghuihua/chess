@@ -63,6 +63,8 @@ public:
         QString category;
         QString principalVariation;
         QString theme;
+        QString diagnosisTag;
+        QString recommendationReason;
         int mastery = 0;
         int attempts = 0;
         int correctAttempts = 0;
@@ -91,6 +93,45 @@ public:
         int undoEvents = 0;
         int blunderUndoEvents = 0;
         QString mainWeakness;
+    };
+
+    struct ProfileDimension
+    {
+        QString dimension;
+        QString title;
+        int score = 0;
+        double confidence = 0.0;
+        QString status;
+        QString trend;
+        int evidenceCount = 0;
+        int gameCount = 0;
+        QString hypothesis;
+        QString recommendedTraining;
+    };
+
+    struct TrainingPlanItem
+    {
+        qint64 id = -1;
+        QString diagnosisTag;
+        QString title;
+        int targetCount = 0;
+        int completedCount = 0;
+        QString reason;
+    };
+
+    struct TrainingPlan
+    {
+        qint64 id = -1;
+        qint64 userId = -1;
+        int throughGames = 0;
+        QString focusDimension;
+        QString hypothesis;
+        double confidence = 0.0;
+        QString status;
+        QString successMetric;
+        int reviewAfterGames = 5;
+        QString createdAt;
+        QVector<TrainingPlanItem> items;
     };
 
     struct ProfileReport
@@ -165,6 +206,7 @@ public:
         QString phaseSummary;
         QString keyMoments;
         QString undoSummary;
+        QString profileSummary;
     };
 
     struct GameReview
@@ -223,6 +265,9 @@ public:
     bool recordTrainingAttempt(qint64 positionId, const QString &attemptedMove,
                                bool correct, qint64 thinkingTimeMs,
                                QString *errorMessage = nullptr);
+    bool recordTrainingAttempt(qint64 positionId, const QString &attemptedMove,
+                               bool correct, qint64 thinkingTimeMs, int hintCount,
+                               QString *errorMessage = nullptr);
     TrainingSummary trainingSummary(qint64 userId) const;
 
     TrainingStats trainingStats(qint64 userId) const;
@@ -234,6 +279,9 @@ public:
                                                    int limit = 10) const;
     QVector<GameSummary> completedGames(qint64 userId, int limit = 100) const;
     QVector<RecordedMove> recordedMoves(qint64 gameId) const;
+    bool rebuildPersonalization(qint64 userId, QString *errorMessage = nullptr);
+    QVector<ProfileDimension> profileDimensions(qint64 userId) const;
+    TrainingPlan currentTrainingPlan(qint64 userId) const;
     QString databasePath() const;
 
 private:
