@@ -3,6 +3,30 @@ param(
     [string[]]$CodexArguments
 )
 
+function Find-CodexExecutable {
+    $pathCommand = Get-Command "codex.exe" -ErrorAction SilentlyContinue
+    if ($null -ne $pathCommand) {
+        return $pathCommand.Source
+    }
+
+    $desktopBinRoot = Join-Path $env:LOCALAPPDATA "OpenAI\Codex\bin"
+    if (Test-Path -LiteralPath $desktopBinRoot) {
+        $desktopCandidate = Get-ChildItem -LiteralPath $desktopBinRoot -Recurse -Filter "codex.exe" -File -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+        if ($null -ne $desktopCandidate) {
+            return $desktopCandidate.FullName
+        }
+    }
+
+    $npmCandidate = Join-Path $env:APPDATA "npm\codex.cmd"
+    if (Test-Path -LiteralPath $npmCandidate) {
+        return $npmCandidate
+    }
+
+    throw "Codex CLI was not found in PATH, the Codex desktop installation, or the npm global bin directory."
+}
+
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $keyFile = Join-Path $projectRoot "APIKEY"
 
@@ -18,10 +42,11 @@ if ([string]::IsNullOrWhiteSpace($packyApiKey)) {
     exit 1
 }
 
+$codexExecutable = Find-CodexExecutable
 $previousPackyApiKey = $env:PACKY_API_KEY
 try {
     $env:PACKY_API_KEY = $packyApiKey
-    & codex -p packy -C $projectRoot @CodexArguments
+    & $codexExecutable -p packy -C $projectRoot @CodexArguments
     $codexExitCode = $LASTEXITCODE
 } finally {
     if ($null -eq $previousPackyApiKey) {
