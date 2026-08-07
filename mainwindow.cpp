@@ -193,6 +193,10 @@ MainWindow::MainWindow(QWidget *parent)
     insightSplitter->addWidget(advicePane);
     insightSplitter->setSizes({190, 400});
     coachLayout->addWidget(insightSplitter, 1);
+    coach_thought_edit_ = new QLineEdit(coachTab);
+    coach_thought_edit_->setPlaceholderText(QString::fromUtf8(
+        u8"落子前可写下你的思路（可选），例如：我只看到兑车，没算黑方的反击"));
+    coachLayout->addWidget(coach_thought_edit_);
     auto *questionRow = new QHBoxLayout;
     coach_question_edit_ = new QLineEdit(coachTab);
     coach_question_edit_->setPlaceholderText(QString::fromUtf8(
@@ -448,6 +452,43 @@ QFrame *MainWindow::appendAdviceCard(
     return card;
 }
 
+void MainWindow::appendCoachFeedbackControls(QFrame *card, qint64 gameId, int ply)
+{
+    if (!card || gameId < 0 || ply <= 0) return;
+    auto *row = new QFrame(card);
+    row->setObjectName("coachFeedback");
+    auto *layout = new QHBoxLayout(row);
+    layout->setContentsMargins(0, 3, 0, 0);
+    layout->setSpacing(6);
+    auto *label = new QLabel(QString::fromUtf8(u8"这条讲解："), row);
+    layout->addWidget(label);
+    const QList<QPair<QString, QString>> options = {
+        {QStringLiteral("clear"), QString::fromUtf8(u8"说清楚了")},
+        {QStringLiteral("abstract"), QString::fromUtf8(u8"太抽象")},
+        {QStringLiteral("variation_unclear"), QString::fromUtf8(u8"不理解变化")}};
+    for (const auto &option : options) {
+        auto *button = new QPushButton(option.second, row);
+        button->setObjectName("coachFeedbackButton");
+        connect(button, &QPushButton::clicked, this,
+                [this, row, label, gameId, ply, feedback = option.first, text = option.second] {
+            QString error;
+            if (!database_.recordCoachFeedback(active_user_id_, gameId, ply, feedback, &error)) {
+                label->setText(QString::fromUtf8(u8"保存失败：") + error);
+                return;
+            }
+            label->setText(QString::fromUtf8(u8"已记录：") + text);
+            for (QPushButton *other : row->findChildren<QPushButton *>()) {
+                other->setEnabled(false);
+            }
+        });
+        layout->addWidget(button);
+    }
+    layout->addStretch(1);
+    if (auto *cardLayout = qobject_cast<QVBoxLayout *>(card->layout())) {
+        cardLayout->addWidget(row);
+    }
+}
+
 void MainWindow::appendChatBubble(bool user, const QString &text, bool error)
 {
     if (!advice_feed_layout_) return;
@@ -636,21 +677,50 @@ void MainWindow::handleAnalysis(const PikafishAnalyzer::AnalysisResult &result)
         .arg(result.scoreLoss)
         .arg(result.ply);
     analysis_browser_->append(html);
+    const QString actualLine = result.actualPrincipalVariation.isEmpty()
+        ? QString::fromUtf8(u8"引擎未返回足够的后续变化")
+        : result.actualPrincipalVariation;
+    const QString bestLine = result.principalVariation.isEmpty()
+        ? QString::fromUtf8(u8"引擎未返回足够的后续变化")
+        : result.principalVariation;
+    const QString learnerThought = coach_thought_edit_ ? coach_thought_edit_->text().trimmed()
+                                                       : QString();
+    if (coach_thought_edit_ && !learnerThought.isEmpty()) {
+        coach_thought_edit_->clear();
+    }
+    if (result.scoreLoss > 30) {
+        appendAdviceCard(
+            QString::fromUtf8(u8"第 %1 步 · Pikafish 双线对比").arg(result.ply),
+            QString::fromUtf8(u8"实战 %1 使评价从 %2 变为 %3；推荐是 %4。")
+                .arg(result.actualNotation).arg(result.bestScore).arg(result.actualScore)
+                .arg(result.bestNotation),
+            {QString::fromUtf8(u8"实战后：对手的最强回应"),
+             QString::fromUtf8(u8"推荐着后：双方的最佳应对"),
+             QString::fromUtf8(u8"你当时的思路")},
+            {result.actualNotation + QString::fromUtf8(u8" -> ") + actualLine,
+             bestLine,
+             learnerThought.isEmpty() ? QString::fromUtf8(u8"未记录；下次落子前可在下方写下正在计算的变化。")
+                                      : learnerThought},
+            QStringLiteral("notice"), result.ply);
+    }
     coach_chat_context_ = QString::fromUtf8(
         u8"对局数据库 ID：%1\n第 %2 步，红方实际走法：%3（%4）\n"
         u8"Pikafish 推荐：%5（%6）\n评分：%7→%8，局面损失：%9，等级：%10\n"
-        u8"推荐变化：%11\n走棋前局面：%12")
+        u8"实战后惩罚线：%11\n推荐着应对线：%12\n走棋前局面：%13\n学习者当时思路：%14")
         .arg(result.gameId).arg(result.ply)
         .arg(result.actualNotation, result.actualMove,
              result.bestNotation, result.bestMove)
         .arg(result.bestScore).arg(result.actualScore).arg(result.scoreLoss)
-        .arg(categoryText, result.principalVariation, result.boardBefore);
+        .arg(categoryText, actualLine, bestLine, result.boardBefore,
+             learnerThought.isEmpty() ? QString::fromUtf8(u8"未记录") : learnerThought);
     pending_chat_ply_ = result.ply;
     refreshStats();
     if (result.scoreLoss > 30) {
         coach_->requestCoaching(
             result, database_.trainingStats(active_user_id_),
-            database_.moveCoachingContext(result.gameId, result.ply));
+            database_.moveCoachingContext(result.gameId, result.ply)
+                + QString::fromUtf8(u8"\n学习者当时思路：")
+                + (learnerThought.isEmpty() ? QString::fromUtf8(u8"未记录") : learnerThought));
     }
 }
 
@@ -675,6 +745,7 @@ void MainWindow::handleCoaching(const DeepSeekCoach::CoachingResult &result)
                 {result.evidence, result.trainingTask, result.reflectionQuestion},
                 QStringLiteral("coach"), result.ply);
             if (card) {
+                appendCoachFeedbackControls(card, result.gameId, result.ply);
                 card->setProperty("undone", true);
                 if (auto *status = card->findChild<QLabel *>("coachCardStatus")) {
                     status->setVisible(true);
@@ -694,12 +765,13 @@ void MainWindow::handleCoaching(const DeepSeekCoach::CoachingResult &result)
         coach_status_label_->setText(QString::fromUtf8(u8"保存 AI 建议失败：") + error);
     }
 
-    appendAdviceCard(
+    QFrame *card = appendAdviceCard(
         QString::fromUtf8(u8"第 %1 步 · AI 教练").arg(result.ply), result.diagnosis,
         {QString::fromUtf8(u8"关键变化"), QString::fromUtf8(u8"推荐着的目的"),
          QString::fromUtf8(u8"实战判定标准")},
         {result.evidence, result.trainingTask, result.reflectionQuestion},
         QStringLiteral("coach"), result.ply);
+    appendCoachFeedbackControls(card, result.gameId, result.ply);
     coach_chat_context_ += QString::fromUtf8(
         u8"\nAI 初步诊断：%1\n关键变化：%2\n推荐着目的：%3\n实战判定标准：%4")
         .arg(result.diagnosis, result.evidence,

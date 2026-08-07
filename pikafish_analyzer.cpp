@@ -341,9 +341,15 @@ void PikafishAnalyzer::finishCurrentAnalysis()
     result.scoreLoss = calculateScoreLoss(result);
     result.category = categoryForLoss(result.scoreLoss);
     result.rawPrincipalVariation = best_pv_;
+    result.rawActualPrincipalVariation = latest_pv_;
     result.sideToMove = current_.move.side;
     result.principalVariation = toChinesePrincipalVariation(
         current_.move.boardBefore, current_.move.side, best_pv_);
+    result.actualPrincipalVariation = toChinesePrincipalVariation(
+        current_.move.boardAfter,
+        current_.move.side == XiangqiGame::Side::Red
+            ? XiangqiGame::Side::Black : XiangqiGame::Side::Red,
+        latest_pv_);
     result.explanation = explanationFor(result);
     result.boardBefore = QString::fromStdString(current_.move.boardBefore);
     result.thinkingTimeMs = current_.move.thinkingTimeMs;

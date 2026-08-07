@@ -291,6 +291,9 @@ public:
                         const QString &trainingTask,
                         const QString &reflectionQuestion,
                         QString *errorMessage = nullptr);
+    bool recordCoachFeedback(qint64 userId, qint64 gameId, int ply,
+                             const QString &feedback,
+                             QString *errorMessage = nullptr);
     QString moveCoachingContext(qint64 gameId, int throughPly) const;
     bool buildGameReviewContext(qint64 gameId, GameReviewContext *context,
                                 QString *errorMessage = nullptr) const;

@@ -27,6 +27,8 @@ public:
         QString category;
         QString principalVariation;
         QString rawPrincipalVariation;
+        QString actualPrincipalVariation;
+        QString rawActualPrincipalVariation;
         XiangqiGame::Side sideToMove = XiangqiGame::Side::Red;
         QString explanation;
         QString boardBefore;

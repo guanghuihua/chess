@@ -144,6 +144,12 @@ bool GameDatabase::executeSchema(QString *errorMessage)
         "role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL, "
         "FOREIGN KEY(user_id) REFERENCES users(id), FOREIGN KEY(game_id) REFERENCES games(id))",
 
+        "CREATE TABLE IF NOT EXISTS coach_feedback ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, "
+        "game_id INTEGER NOT NULL, ply INTEGER NOT NULL, feedback TEXT NOT NULL, "
+        "created_at TEXT NOT NULL, UNIQUE(user_id, game_id, ply), "
+        "FOREIGN KEY(user_id) REFERENCES users(id), FOREIGN KEY(game_id) REFERENCES games(id))",
+
         "CREATE TABLE IF NOT EXISTS training_positions ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT, source_game_id INTEGER NOT NULL, "
         "source_ply INTEGER NOT NULL, board TEXT NOT NULL, best_move TEXT NOT NULL, "
@@ -196,6 +202,7 @@ bool GameDatabase::executeSchema(QString *errorMessage)
         "CREATE INDEX IF NOT EXISTS idx_undo_events_user ON undo_events(user_id, requested_at)",
         "CREATE INDEX IF NOT EXISTS idx_undo_events_game ON undo_events(game_id)",
         "CREATE INDEX IF NOT EXISTS idx_coach_chat_game ON coach_chat_messages(user_id, game_id, ply, id)",
+        "CREATE INDEX IF NOT EXISTS idx_coach_feedback_user ON coach_feedback(user_id, feedback)",
         "CREATE INDEX IF NOT EXISTS idx_training_due ON training_positions(next_review_at, mastery)",
         "CREATE INDEX IF NOT EXISTS idx_training_attempts_position "
         "ON training_attempts(training_position_id)",
@@ -328,6 +335,35 @@ bool GameDatabase::recordCoaching(qint64 gameId, int ply, const QString &model,
         return false;
     }
     return true;
+}
+
+bool GameDatabase::recordCoachFeedback(qint64 userId, qint64 gameId, int ply,
+                                       const QString &feedback, QString *errorMessage)
+{
+    static const QStringList allowed = {
+        QStringLiteral("clear"), QStringLiteral("abstract"), QStringLiteral("variation_unclear")};
+    if (!allowed.contains(feedback) || gameId < 0 || ply <= 0) {
+        if (errorMessage) *errorMessage = QString::fromUtf8(u8"无效的教练反馈记录。");
+        return false;
+    }
+    QSqlQuery query(database_);
+    query.prepare(
+        "INSERT INTO coach_feedback(user_id,game_id,ply,feedback,created_at) "
+        "SELECT ?,?,?,?,? WHERE EXISTS(SELECT 1 FROM games WHERE id=? AND user_id=?) "
+        "ON CONFLICT(user_id,game_id,ply) DO UPDATE SET feedback=excluded.feedback, "
+        "created_at=excluded.created_at");
+    query.addBindValue(userId);
+    query.addBindValue(gameId);
+    query.addBindValue(ply);
+    query.addBindValue(feedback);
+    query.addBindValue(QDateTime::currentDateTime().toString(Qt::ISODateWithMs));
+    query.addBindValue(gameId);
+    query.addBindValue(userId);
+    if (!query.exec()) {
+        if (errorMessage) *errorMessage = query.lastError().text();
+        return false;
+    }
+    return query.numRowsAffected() > 0;
 }
 
 QString GameDatabase::moveCoachingContext(qint64 gameId, int throughPly) const
@@ -1985,6 +2021,7 @@ bool GameDatabase::deleteCompletedGame(qint64 userId, qint64 gameId,
         || !execute("DELETE FROM undo_events WHERE game_id=?", gameValue)
         || !execute("DELETE FROM game_reviews WHERE game_id=?", gameValue)
         || !execute("DELETE FROM coach_chat_messages WHERE game_id=?", gameValue)
+        || !execute("DELETE FROM coach_feedback WHERE game_id=?", gameValue)
         || !execute("DELETE FROM coaching WHERE game_id=?", gameValue)
         || !execute("DELETE FROM analyses WHERE game_id=?", gameValue)
         || !execute("DELETE FROM moves WHERE game_id=?", gameValue)

@@ -72,6 +72,12 @@ int main(int argc, char *argv[])
             application.exit(7);
             return;
         }
+        if (!database.recordCoachFeedback(1, result.gameId, result.ply,
+                                          QStringLiteral("clear"), &error)) {
+            qCritical() << "Coach feedback write failed:" << error;
+            application.exit(7);
+            return;
+        }
         const QString trainingBest = result.bestMove == result.actualMove
                                          ? QStringLiteral("b2b3")
                                          : result.bestMove;

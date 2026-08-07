@@ -49,6 +49,7 @@ private:
     QWidget *advice_feed_ = nullptr;
     QVBoxLayout *advice_feed_layout_ = nullptr;
     QLineEdit *coach_question_edit_ = nullptr;
+    QLineEdit *coach_thought_edit_ = nullptr;
     QPushButton *coach_question_button_ = nullptr;
     QTextBrowser *stats_browser_ = nullptr;
     QTabWidget *tabs_ = nullptr;
@@ -87,6 +88,7 @@ private:
     void showGameReviewPopup(const DeepSeekCoach::GameReviewResult &result,
                              const GameDatabase::GameReviewContext &context);
     void showEngineRecommendation(int ply);
+    void appendCoachFeedbackControls(QFrame *card, qint64 gameId, int ply);
     QFrame *appendAdviceCard(const QString &title, const QString &lead,
                              const QStringList &sectionTitles = {},
                              const QStringList &sectionTexts = {},

@@ -588,15 +588,16 @@ QByteArray DeepSeekCoach::makeRequestBody(const Request &request)
     const QString systemPrompt = QString::fromUtf8(
         u8"你是一名直接、严谨的中国象棋教练。Pikafish 引擎负责棋局计算，你只负责根据给定证据解释决策错误。"
         u8"不得否定或修改引擎给出的最佳走法和评分，不得编造未提供的变化。"
-        u8"禁止寒暄、鼓励、复述全部输入、抽象评价性格，以及‘加强计算’‘注意局面’等空话。"
-        u8"禁止给出‘重做此局面N次’‘按将军吃子威胁检查’‘落子前自问’等模板化训练话术。"
-        u8"必须解释棋子、线路、先手、交换或弱点之间的具体因果；如果推荐变化不足以证明战术得失，"
-        u8"就明确说明这是子力协调、空间或先手效率问题，不得虚构对手强制惩罚。"
+        u8"禁止寒暄、鼓励、抽象评价性格，以及‘加强计算’‘注意局面’等空话。"
+        u8"必须先比较实战后惩罚线与推荐着应对线，再解释棋子、线路、先手、交换或弱点之间的具体因果。"
+        u8"每个字段至少引用一个给定的中文棋谱或明确棋子/线路；若引擎变化不足以证明强制战术，"
+        u8"必须明确写‘引擎未证明强制战术’，并说明可确认的局面差异，不得虚构惩罚。"
+        u8"学习者当时思路是对其计算过程的线索：只在证据支持时说明哪里漏算或误判，不得做人格判断。"
         u8"必须输出且只输出一个 JSON 对象，包含四个字符串字段："
-        u8"diagnosis：45字以内，直接指出实战着改变了哪条线路、哪枚棋的处境或哪一方的先手；"
-        u8"evidence：100字以内，从给定推荐变化中截取最关键的2至6个半回合，用中文着法说明具体后果；"
-        u8"training_task：80字以内，解释推荐着法的真实目的，以及它相对实战着改善了什么；"
-        u8"reflection_question：45字以内，写成肯定句，给出本类局面的实战判定标准，不要使用问号。"
+        u8"diagnosis：60字以内，直接说明实战着漏掉了什么具体对象或线路；"
+        u8"evidence：140字以内，先写实战后对手如何应对，再写推荐线如何避免同一问题；"
+        u8"training_task：100字以内，说明推荐着的真实目的，并给出本局应比较的两个候选着；"
+        u8"reflection_question：60字以内，写成一个可执行的落子前检查标准，不要使用问号。"
         u8"JSON 字段名必须保持 diagnosis、evidence、training_task、reflection_question，不要输出 Markdown。"
         u8"禁止输出 a0-i9、f5-c3 等坐标着法；所有走法必须使用中文棋谱，例如车九进一。");
 
@@ -604,9 +605,9 @@ QByteArray DeepSeekCoach::makeRequestBody(const Request &request)
         u8"请根据以下结构化证据输出 JSON 教练建议：\n"
         u8"步数：%1\n实际走法：%2（%3）\n引擎推荐：%4（%5）\n"
         u8"最佳评分：%6\n实际评分：%7\n局面损失：%8\n错误等级：%9\n"
-        u8"思考时间：%10 毫秒\n推荐变化：%11\n走棋前局面编码：%12\n"
-        u8"长期统计：累计对局 %13，已分析红方走法 %14，平均损失 %15，严重失误 %16，"
-        u8"主动悔棋 %17 次，其中已确认明显/严重失误 %18 次。")
+        u8"思考时间：%10 毫秒\n实战后惩罚线：%11\n推荐着应对线：%12\n走棋前局面编码：%13\n"
+        u8"长期统计：累计对局 %14，已分析红方走法 %15，平均损失 %16，严重失误 %17，"
+        u8"主动悔棋 %18 次，其中已确认明显/严重失误 %19 次。")
         .arg(analysis.ply)
         .arg(analysis.actualNotation, analysis.actualMove,
              analysis.bestNotation, analysis.bestMove)
@@ -615,6 +616,9 @@ QByteArray DeepSeekCoach::makeRequestBody(const Request &request)
         .arg(analysis.scoreLoss)
         .arg(analysis.category)
         .arg(analysis.thinkingTimeMs)
+        .arg(analysis.actualPrincipalVariation.isEmpty()
+                 ? QString::fromUtf8(u8"引擎未返回足够的实战后变化")
+                 : analysis.actualPrincipalVariation)
         .arg(analysis.principalVariation)
         .arg(analysis.boardBefore)
         .arg(stats.games)
@@ -632,8 +636,8 @@ QByteArray DeepSeekCoach::makeRequestBody(const Request &request)
     QJsonObject body;
     body["model"] = QString::fromLatin1(deepSeekModel);
     body["stream"] = false;
-    body["max_tokens"] = 420;
-    body["temperature"] = 0.15;
+    body["max_tokens"] = 650;
+    body["temperature"] = 0.1;
     body["response_format"] = QJsonObject{{"type", "json_object"}};
     body["messages"] = QJsonArray{
         QJsonObject{{"role", "system"}, {"content", systemPrompt}},
