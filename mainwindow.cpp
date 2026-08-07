@@ -1015,6 +1015,10 @@ void MainWindow::undoTurn()
 void MainWindow::startPersonalTraining()
 {
     TrainingDialog dialog(&database_, active_user_id_, this);
+    connect(&dialog, &TrainingDialog::coachQuestionAsked,
+            coach_, &DeepSeekCoach::requestChat);
+    connect(coach_, &DeepSeekCoach::chatReplyReady,
+            &dialog, &TrainingDialog::receiveCoachReply);
     dialog.exec();
     refreshStats();
 }

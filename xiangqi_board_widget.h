@@ -44,6 +44,7 @@ public:
     bool loadReviewPosition(const std::string &board, XiangqiGame::Side sideToMove,
                             int fromRow = -1, int fromCol = -1,
                             int toRow = -1, int toCol = -1);
+    bool loadBranchPosition(const std::string &board, XiangqiGame::Side sideToMove);
     void setDifficulty(Difficulty difficulty);
     Difficulty difficulty() const;
 

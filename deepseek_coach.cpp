@@ -20,7 +20,7 @@ const char fastModelName[] = "deepseek-v4-flash";
 const char reasoningModelName[] = "deepseek-v4-pro";
 const char endpoint[] = "https://api.deepseek.com/chat/completions";
 const char packyEndpoint[] = "https://www.packyapi.ai/v1/responses";
-const char packyFastModel[] = "gpt-5.6-terra";
+const char packyFastModel[] = "gpt-5.6-sol";
 const char packyReviewModel[] = "gpt-5.6-sol";
 }
 
@@ -66,7 +66,7 @@ DeepSeekCoach::DeepSeekCoach(QObject *parent)
                 u8"AI 未启用：请配置 DeepSeek，或提供 PACKY_API_KEY/APIKEY"), false);
         } else {
             emit statusChanged(packy_mode_
-                ? QString::fromUtf8(u8"Packy Codex 已启用 · 单步 Terra / 复盘 Sol")
+                ? QString::fromUtf8(u8"Packy GPT-5.6 Sol 已启用 · 单步与整盘复盘")
                 : QString::fromUtf8(u8"DeepSeek AI 教练已启用"), true);
         }
     });
@@ -136,7 +136,7 @@ void DeepSeekCoach::testConnection()
 
         const bool success = networkOk && modelFound;
         const QString message = success
-            ? (packy_mode_ ? QString::fromUtf8(u8"连接成功：GPT-5.6 Terra / Sol 可用")
+            ? (packy_mode_ ? QString::fromUtf8(u8"连接成功：GPT-5.6 Sol 可用")
                            : QString::fromUtf8(u8"连接成功：DeepSeek V4 Flash 可用"))
             : (networkOk
                    ? QString::fromUtf8(u8"连接成功，但账号暂时不可用 DeepSeek V4 Flash")
@@ -264,7 +264,7 @@ void DeepSeekCoach::handleReply(QNetworkReply *reply, const Request &request)
     busy_ = false;
 
     if (networkError != QNetworkReply::NoError) {
-        emit statusChanged(QString::fromUtf8(u8"DeepSeek 请求失败：") + networkErrorText, false);
+        emit statusChanged(QString::fromUtf8(u8"AI 请求失败：") + networkErrorText, false);
         processNext();
         return;
     }
@@ -272,7 +272,7 @@ void DeepSeekCoach::handleReply(QNetworkReply *reply, const Request &request)
     CoachingResult result;
     QString error;
     if (!parseCoachingContent(responseBody, request, &result, &error)) {
-        emit statusChanged(QString::fromUtf8(u8"DeepSeek 返回内容无法解析：") + error, false);
+        emit statusChanged(QString::fromUtf8(u8"AI 返回内容无法解析：") + error, false);
         processNext();
         return;
     }
@@ -289,11 +289,15 @@ void DeepSeekCoach::handleGameReviewReply(QNetworkReply *reply,
     const QByteArray responseBody = normalizedResponseBody(reply->readAll());
     const QNetworkReply::NetworkError networkError = reply->error();
     const QString networkErrorText = reply->errorString();
+    const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     reply->deleteLater();
     busy_ = false;
 
     if (networkError != QNetworkReply::NoError) {
-        retryOrFallbackGameReview(request, networkErrorText);
+        const QString reason = httpStatus > 0
+            ? QStringLiteral("HTTP %1: %2").arg(httpStatus).arg(networkErrorText)
+            : networkErrorText;
+        retryOrFallbackGameReview(request, reason);
         return;
     }
 
@@ -306,7 +310,7 @@ void DeepSeekCoach::handleGameReviewReply(QNetworkReply *reply,
 
     result.model = activeReviewModel();
     emit gameReviewReady(result);
-    emit statusChanged(QString::fromUtf8(u8"DeepSeek 整盘复盘已完成"), true);
+    emit statusChanged(QString::fromUtf8(u8"AI 整盘复盘已完成"), true);
     processNext();
 }
 
@@ -352,7 +356,7 @@ void DeepSeekCoach::retryOrFallbackGameReview(
 
     emit gameReviewReady(fallback);
     emit statusChanged(
-        QString::fromUtf8(u8"DeepSeek 整盘复盘失败，已自动生成本地引擎复盘：")
+        QString::fromUtf8(u8"AI 整盘复盘失败，已自动生成本地引擎复盘：")
             + reason,
         false);
     processNext();
@@ -467,7 +471,7 @@ QByteArray DeepSeekCoach::providerRequestBody(
     body["stream"] = true;
     body["store"] = false;
     body["max_output_tokens"] = wholeGame ? 1800 : 1100;
-    body["reasoning"] = QJsonObject{{"effort", wholeGame ? "high" : "medium"}};
+    body["reasoning"] = QJsonObject{{"effort", "high"}};
     body["text"] = QJsonObject{{"verbosity", "low"}};
     return QJsonDocument(body).toJson(QJsonDocument::Compact);
 }
@@ -476,15 +480,57 @@ QByteArray DeepSeekCoach::normalizedResponseBody(const QByteArray &body) const
 {
     if (!packy_mode_) return body;
     QString combined;
+    QString providerError;
+    const auto consumeEvent = [&combined, &providerError](const QJsonObject &event) {
+        const QString type = event.value("type").toString();
+        if (type == "error" || type == "response.failed") {
+            const QJsonObject error = event.value("error").toObject();
+            providerError = error.value("message").toString();
+            if (providerError.isEmpty()) providerError = event.value("message").toString();
+            return;
+        }
+        if (type == "response.output_text.delta") {
+            combined += event.value("delta").toString();
+            return;
+        }
+        if (type == "response.output_text.done") {
+            const QString text = event.value("text").toString();
+            if (!text.isEmpty()) combined = text;
+            return;
+        }
+        const QString outputText = event.value("output_text").toString();
+        if (!outputText.isEmpty()) combined += outputText;
+        for (const QJsonValue &item : event.value("output").toArray()) {
+            for (const QJsonValue &content : item.toObject().value("content").toArray()) {
+                const QString text = content.toObject().value("text").toString();
+                if (!text.isEmpty()) combined += text;
+            }
+        }
+    };
+    const QByteArray trimmed = body.trimmed();
+    if (trimmed.startsWith('{')) {
+        QJsonParseError parseError;
+        const QJsonDocument document = QJsonDocument::fromJson(trimmed, &parseError);
+        if (parseError.error == QJsonParseError::NoError && document.isObject()) {
+            const QJsonObject object = document.object();
+            if (object.contains("choices")) return trimmed;
+            consumeEvent(object);
+        }
+    }
     for (QByteArray line : body.split('\n')) {
         line = line.trimmed();
         if (!line.startsWith("data:")) continue;
         const QByteArray json = line.mid(5).trimmed();
         if (json == "[DONE]") continue;
-        const QJsonObject event = QJsonDocument::fromJson(json).object();
-        if (event.value("type").toString() == "response.output_text.delta") {
-            combined += event.value("delta").toString();
+        QJsonParseError parseError;
+        const QJsonDocument document = QJsonDocument::fromJson(json, &parseError);
+        if (parseError.error == QJsonParseError::NoError && document.isObject()) {
+            consumeEvent(document.object());
         }
+    }
+    if (combined.trimmed().isEmpty() && !providerError.isEmpty()) {
+        return QJsonDocument(QJsonObject{{"error", QJsonObject{{"message", providerError}}}})
+            .toJson(QJsonDocument::Compact);
     }
     QJsonObject normalized;
     normalized["choices"] = QJsonArray{QJsonObject{

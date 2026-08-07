@@ -184,6 +184,32 @@ bool XiangqiBoardWidget::loadReviewPosition(const std::string &board,
     return true;
 }
 
+bool XiangqiBoardWidget::loadBranchPosition(const std::string &board,
+                                            XiangqiGame::Side sideToMove)
+{
+    engine_timeout_.stop();
+    engine_busy_ = false;
+    engine_ready_ = false;
+    engine_buffer_.clear();
+    selected_.reset();
+    training_mode_ = false;
+    training_locked_ = false;
+    review_move_.reset();
+    if (engine_process_.state() != QProcess::NotRunning) {
+        engine_process_.kill();
+        engine_process_.waitForFinished(1000);
+    }
+    if (!game_.loadPosition(board, sideToMove)) {
+        return false;
+    }
+    turn_timer_.restart();
+    update();
+    if (opponent_enabled_ && game_.sideToMove() == XiangqiGame::Side::Black) {
+        startEngine();
+    }
+    return true;
+}
+
 int XiangqiBoardWidget::undoTurn()
 {
     if (game_.moveHistory().empty()) {

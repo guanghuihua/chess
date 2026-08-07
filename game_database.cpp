@@ -679,14 +679,20 @@ int GameDatabase::generateTrainingPositions(qint64 userId, QString *errorMessage
         "mastery, next_review_at, created_at) "
         "SELECT a.game_id, a.ply, m.board_before, a.best_move, a.actual_move, "
         "a.score_loss, a.category, a.principal_variation, "
-        "CASE WHEN a.best_score > 90000 THEN '寻找将杀' "
+        "CASE WHEN EXISTS (SELECT 1 FROM diagnosis_tags dm WHERE dm.game_id=a.game_id "
+        "AND dm.ply=a.ply AND dm.tag='missed_mate') THEN '将杀与残局杀法' "
+        "WHEN EXISTS (SELECT 1 FROM diagnosis_tags de WHERE de.game_id=a.game_id "
+        "AND de.ply=a.ply AND de.tag='endgame_technique') THEN '残局技术' "
+        "WHEN a.best_score > 90000 THEN '寻找将杀' "
         "WHEN a.score_loss > 200 THEN '防止严重失误' "
         "WHEN a.score_loss > 80 THEN '候选着比较' "
         "ELSE '局面优化' END, "
         "COALESCE((SELECT dt.tag FROM diagnosis_tags dt "
         "WHERE dt.game_id=a.game_id AND dt.ply=a.ply "
         "ORDER BY dt.confidence DESC, dt.id LIMIT 1),'unknown'), "
-        "'来自用户真实对局，并与当前画像重点相关', 0, ?, ? "
+        "COALESCE((SELECT dt.evidence FROM diagnosis_tags dt "
+        "WHERE dt.game_id=a.game_id AND dt.ply=a.ply ORDER BY dt.confidence DESC,dt.id LIMIT 1),"
+        "'来自用户真实对局，并与当前画像重点相关'), 0, ?, ? "
         "FROM analyses a JOIN moves m ON m.game_id = a.game_id AND m.ply = a.ply "
         "JOIN games g ON g.id = a.game_id "
         "WHERE g.user_id = ? AND m.side = 'red' "
@@ -701,7 +707,30 @@ int GameDatabase::generateTrainingPositions(qint64 userId, QString *errorMessage
         }
         return -1;
     }
-    return query.numRowsAffected();
+    int inserted = query.numRowsAffected();
+
+    // A reverted move is still a valid training position even after the live
+    // move has been removed from the formal game record.
+    QSqlQuery undoQuery(database_);
+    undoQuery.prepare(
+        "INSERT OR IGNORE INTO training_positions("
+        "source_game_id,source_ply,board,best_move,actual_move,score_loss,category,"
+        "principal_variation,theme,diagnosis_tag,recommendation_reason,mastery,"
+        "next_review_at,created_at) "
+        "SELECT game_id,red_move_ply,board_before,best_move,actual_move,"
+        "COALESCE(score_loss,0),COALESCE(category,'mistake'),principal_variation,"
+        "'悔棋后提前识别', 'undo_behavior',"
+        "'来自悔棋证据：训练在落子前识别同类风险，避免事后才撤回',0,?,? "
+        "FROM undo_events WHERE user_id=? AND best_move<>''");
+    undoQuery.addBindValue(now);
+    undoQuery.addBindValue(now);
+    undoQuery.addBindValue(userId);
+    if (!undoQuery.exec()) {
+        if (errorMessage) *errorMessage = undoQuery.lastError().text();
+        return -1;
+    }
+    inserted += undoQuery.numRowsAffected();
+    return inserted;
 }
 
 QVector<GameDatabase::TrainingPosition> GameDatabase::dueTrainingPositions(qint64 userId,
@@ -719,8 +748,9 @@ QVector<GameDatabase::TrainingPosition> GameDatabase::dueTrainingPositions(qint6
         "ON t.training_position_id = p.id "
         "WHERE g.user_id = ? AND (p.next_review_at IS NULL OR p.next_review_at <= ?) "
         "GROUP BY p.id ORDER BY "
-        "CASE WHEN p.diagnosis_tag=COALESCE((SELECT focus_dimension FROM training_plans "
-        "WHERE user_id=? ORDER BY through_games DESC, id DESC LIMIT 1),'') THEN 0 ELSE 1 END, "
+        "CASE WHEN p.diagnosis_tag IN (SELECT diagnosis_tag FROM training_plan_items "
+        "WHERE plan_id=(SELECT id FROM training_plans WHERE user_id=? "
+        "ORDER BY through_games DESC, id DESC LIMIT 1)) THEN 0 ELSE 1 END, "
         "p.mastery ASC, p.score_loss DESC, p.id ASC LIMIT ?");
     query.addBindValue(userId);
     query.addBindValue(QDateTime::currentDateTime().toString(Qt::ISODateWithMs));
@@ -1245,13 +1275,24 @@ GameDatabase::TrainingStats GameDatabase::trainingStats(qint64 userId) const
     QSqlQuery undoQuery(database_);
     undoQuery.prepare(
         "SELECT COUNT(*), COALESCE(SUM(had_analysis),0), "
-        "COALESCE(SUM(CASE WHEN category IN ('mistake','blunder') THEN 1 ELSE 0 END),0) "
+        "COALESCE(SUM(CASE WHEN category='inaccuracy' THEN 1 ELSE 0 END),0), "
+        "COALESCE(SUM(CASE WHEN category='blunder' THEN 1 ELSE 0 END),0), "
+        "COALESCE(SUM(CASE WHEN category='mistake' THEN 1 ELSE 0 END),0), "
+        "COALESCE(SUM(CASE WHEN category NOT IN ('inaccuracy','mistake','blunder') "
+        "OR category IS NULL OR category='' THEN 1 ELSE 0 END),0) "
         "FROM undo_events WHERE user_id=?");
     undoQuery.addBindValue(userId);
     if (undoQuery.exec() && undoQuery.next()) {
         stats.undoEvents = undoQuery.value(0).toInt();
         stats.analyzedUndoEvents = undoQuery.value(1).toInt();
-        stats.blunderUndoEvents = undoQuery.value(2).toInt();
+        const int undoInaccuracies = undoQuery.value(2).toInt();
+        const int undoBlunders = undoQuery.value(3).toInt();
+        const int undoMistakes = undoQuery.value(4).toInt();
+        const int undoUnclassified = undoQuery.value(5).toInt();
+        stats.inaccuracies += undoInaccuracies;
+        stats.mistakes += undoMistakes + undoUnclassified;
+        stats.blunders += undoBlunders;
+        stats.blunderUndoEvents = undoMistakes + undoBlunders;
     }
     return stats;
 }

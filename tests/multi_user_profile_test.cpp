@@ -219,7 +219,8 @@ int main(int argc, char *argv[])
         || database.gameUndoEvents(trainingGame).front().evidence
                != QString::fromUtf8(u8"引擎损失 135")
         || database.trainingStats(alice).undoEvents != 1
-        || database.trainingStats(alice).blunderUndoEvents != 1) {
+        || database.trainingStats(alice).blunderUndoEvents != 1
+        || database.trainingStats(alice).mistakes != 1) {
         return 16;
     }
     const qint64 disposableGame = database.startGame(bob, &error);

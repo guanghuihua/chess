@@ -47,6 +47,7 @@ private:
     QPushButton *previous_button_ = nullptr;
     QPushButton *next_button_ = nullptr;
     QPushButton *last_button_ = nullptr;
+    QPushButton *branch_button_ = nullptr;
     QTabWidget *detail_tabs_ = nullptr;
     QTextBrowser *move_detail_ = nullptr;
     QTextBrowser *whole_review_ = nullptr;
@@ -66,6 +67,7 @@ private:
     void showPosition(int index);
     void updateNavigation();
     void deleteSelectedGame();
+    void openBranch();
     void sendChatQuestion();
     void loadChatHistory();
     QString moveHtml(const GameDatabase::RecordedMove &move) const;

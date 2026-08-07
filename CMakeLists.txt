@@ -41,6 +41,8 @@ set(PROJECT_SOURCES
         game_review_dialog.h
         engine_variation_dialog.cpp
         engine_variation_dialog.h
+        review_branch_dialog.cpp
+        review_branch_dialog.h
 )
 
 if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
@@ -136,6 +138,8 @@ add_executable(training_ui_smoke_test
     game_database.h
     game_review_dialog.cpp
     game_review_dialog.h
+    review_branch_dialog.cpp
+    review_branch_dialog.h
     pikafish_analyzer.cpp
     pikafish_analyzer.h
 )

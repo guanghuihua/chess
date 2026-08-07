@@ -1,6 +1,7 @@
 #include "game_review_dialog.h"
 
 #include "pikafish_analyzer.h"
+#include "review_branch_dialog.h"
 #include "xiangqi_board_widget.h"
 
 #include <algorithm>
@@ -117,6 +118,8 @@ GameReviewDialog::GameReviewDialog(GameDatabase *database, qint64 userId,
     previous_button_ = new QPushButton(QString::fromUtf8(u8"< 上一步"), content);
     next_button_ = new QPushButton(QString::fromUtf8(u8"下一步 >"), content);
     last_button_ = new QPushButton(QString::fromUtf8(u8"末局面 >|"), content);
+    branch_button_ = new QPushButton(QString::fromUtf8(u8"尝试替代着法"), content);
+    branch_button_->setObjectName("branchButton");
     timeline_ = new QSlider(Qt::Horizontal, content);
     position_label_ = new QLabel(content);
     position_label_->setMinimumWidth(90);
@@ -127,6 +130,7 @@ GameReviewDialog::GameReviewDialog(GameDatabase *database, qint64 userId,
     navigation->addWidget(position_label_);
     navigation->addWidget(next_button_);
     navigation->addWidget(last_button_);
+    navigation->addWidget(branch_button_);
     contentLayout->addLayout(navigation);
 
     splitter->addWidget(game_list_);
@@ -153,6 +157,8 @@ GameReviewDialog::GameReviewDialog(GameDatabase *database, qint64 userId,
             this, [this] { showPosition(position_index_ + 1); });
     connect(last_button_, &QPushButton::clicked,
             this, [this] { showPosition(static_cast<int>(moves_.size())); });
+    connect(branch_button_, &QPushButton::clicked,
+            this, &GameReviewDialog::openBranch);
     connect(chat_button_, &QPushButton::clicked,
             this, &GameReviewDialog::sendChatQuestion);
     connect(chat_edit_, &QLineEdit::returnPressed,
@@ -170,6 +176,8 @@ GameReviewDialog::GameReviewDialog(GameDatabase *database, qint64 userId,
         QPushButton:hover { background:#efe7da; }
         QPushButton#deleteGameButton { color:#9b342b; border-color:#d9a8a1; }
         QPushButton#deleteGameButton:hover { background:#fbe8e5; }
+        QPushButton#branchButton { color:#315f54; border-color:#9bb8ac; }
+        QPushButton#branchButton:hover { background:#e5f0eb; }
     )"));
     loadGames();
 }
@@ -256,9 +264,25 @@ void GameReviewDialog::updateNavigation()
     previous_button_->setEnabled(position_index_ > 0);
     next_button_->setEnabled(position_index_ < maximum);
     last_button_->setEnabled(position_index_ < maximum);
+    const bool canBranch = position_index_ >= 0
+        && position_index_ < maximum
+        && moves_.at(position_index_).side == "red";
+    branch_button_->setEnabled(canBranch);
+    branch_button_->setToolTip(canBranch
+        ? QString::fromUtf8(u8"从当前红方落子前创建临时分支")
+        : QString::fromUtf8(u8"请选择红方着法前的局面"));
     timeline_->setEnabled(maximum > 0);
     position_label_->setText(QString::fromUtf8(u8"局面 %1 / %2")
                                  .arg(position_index_).arg(maximum));
+}
+
+void GameReviewDialog::openBranch()
+{
+    if (position_index_ < 0 || position_index_ >= moves_.size()) return;
+    const auto &move = moves_.at(position_index_);
+    if (move.side != "red") return;
+    ReviewBranchDialog dialog(move.boardBefore, this);
+    dialog.exec();
 }
 
 void GameReviewDialog::deleteSelectedGame()

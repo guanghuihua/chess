@@ -12,6 +12,7 @@
 #include <QPushButton>
 #include <QTextBrowser>
 #include <QVBoxLayout>
+#include <QUuid>
 
 TrainingDialog::TrainingDialog(GameDatabase *database, qint64 userId, QWidget *parent)
     : QDialog(parent)
@@ -41,7 +42,7 @@ TrainingDialog::TrainingDialog(GameDatabase *database, qint64 userId, QWidget *p
     panelLayout->setContentsMargins(18, 18, 18, 18);
     panelLayout->setSpacing(12);
 
-    auto *title = new QLabel(QString::fromUtf8(u8"历史错题再训练"), panel);
+    auto *title = new QLabel(QString::fromUtf8(u8"个性化针对训练"), panel);
     title->setObjectName("trainingTitle");
     panelLayout->addWidget(title);
 
@@ -72,9 +73,12 @@ TrainingDialog::TrainingDialog(GameDatabase *database, qint64 userId, QWidget *p
     auto *buttonRow = new QHBoxLayout;
     hint_button_ = new QPushButton(QString::fromUtf8(u8"提示"), panel);
     next_button_ = new QPushButton(QString::fromUtf8(u8"下一题"), panel);
+    ai_button_ = new QPushButton(QString::fromUtf8(u8"AI残局讲解"), panel);
+    ai_button_->setObjectName("trainingAiButton");
     next_button_->setObjectName("trainingPrimary");
     auto *closeButton = new QPushButton(QString::fromUtf8(u8"结束训练"), panel);
     buttonRow->addWidget(hint_button_);
+    buttonRow->addWidget(ai_button_);
     buttonRow->addWidget(next_button_);
     buttonRow->addStretch();
     buttonRow->addWidget(closeButton);
@@ -99,6 +103,8 @@ TrainingDialog::TrainingDialog(GameDatabase *database, qint64 userId, QWidget *p
         }
         QPushButton:hover { background: #f0eadf; }
         QPushButton#trainingPrimary { color: white; background: #9b3f2f; border-color: #873426; }
+        QPushButton#trainingAiButton { color: #315f54; border-color: #9bb8ac; }
+        QPushButton#trainingAiButton:hover { background: #e5f0eb; }
         QPushButton:disabled { color: #999; background: #eeeae2; }
     )"));
 
@@ -108,6 +114,8 @@ TrainingDialog::TrainingDialog(GameDatabase *database, qint64 userId, QWidget *p
             this, &TrainingDialog::showHint);
     connect(next_button_, &QPushButton::clicked,
             this, &TrainingDialog::nextPosition);
+    connect(ai_button_, &QPushButton::clicked,
+            this, &TrainingDialog::requestEndgameCoaching);
     connect(closeButton, &QPushButton::clicked,
             this, &QDialog::accept);
 
@@ -130,6 +138,7 @@ void TrainingDialog::loadSession()
             u8"<h3>今日训练已完成</h3><p>已经掌握的题目会按照间隔复习计划再次出现。</p>"));
         board_->setEnabled(false);
         hint_button_->setEnabled(false);
+        ai_button_->setEnabled(false);
         next_button_->setEnabled(false);
         return;
     }
@@ -147,7 +156,15 @@ void TrainingDialog::loadCurrentPosition()
                                  .arg(current_index_ + 1)
                                  .arg(positions_.size())
                                  .arg(position.mastery));
-    theme_label_->setText(QString::fromUtf8(u8"训练主题：") + position.theme);
+    QString sourceKind = QString::fromUtf8(u8"画像专项");
+    if (position.diagnosisTag == "undo_behavior") {
+        sourceKind = QString::fromUtf8(u8"悔棋证据");
+    } else if (position.diagnosisTag == "missed_mate"
+               || position.theme.contains(QString::fromUtf8(u8"残局"))) {
+        sourceKind = QString::fromUtf8(u8"残局/将杀专项");
+    }
+    theme_label_->setText(QString::fromUtf8(u8"训练主题：") + position.theme
+                          + QString::fromUtf8(u8" · ") + sourceKind);
     source_label_->setText(QString::fromUtf8(
         u8"来自你的第 %1 盘、第 %2 步 · 当时局面损失 %3 · 已练习 %4 次")
         .arg(position.sourceGameId)
@@ -157,6 +174,8 @@ void TrainingDialog::loadCurrentPosition()
         + QString::fromUtf8(u8"\n推荐原因：") + position.recommendationReason);
     result_browser_->clear();
     hint_button_->setEnabled(true);
+    ai_button_->setEnabled(position.theme.contains(QString::fromUtf8(u8"残局"))
+                           || position.diagnosisTag == "missed_mate");
     next_button_->setEnabled(false);
     hint_count_ = 0;
     if (!board_->loadTrainingPosition(position.board.toStdString())) {
@@ -203,6 +222,7 @@ void TrainingDialog::handleMove(const QString &uciMove)
                                   .arg(hint_count_))
                      : QString::fromUtf8(u8"建议比较目标着与实战走法，检查自己遗漏了什么强制手段。")));
     hint_button_->setEnabled(false);
+    ai_button_->setEnabled(false);
     next_button_->setEnabled(true);
 }
 
@@ -255,10 +275,57 @@ void TrainingDialog::nextPosition()
         source_label_->clear();
         board_->setEnabled(false);
         hint_button_->setEnabled(false);
+        ai_button_->setEnabled(false);
         next_button_->setEnabled(false);
         return;
     }
     loadCurrentPosition();
+}
+
+void TrainingDialog::requestEndgameCoaching()
+{
+    if (!coach_request_id_.isEmpty() || current_index_ < 0
+        || current_index_ >= positions_.size()) {
+        return;
+    }
+    const auto &position = positions_.at(current_index_);
+    coach_request_id_ = QStringLiteral("training-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString evidence = QString::fromUtf8(
+        u8"这是程序已经通过 XiangqiGame 合法性检查、并由 Pikafish 计算的残局/将杀训练局面。"
+        u8"请只根据给定证据讲解，不要编造未提供的着法。\n"
+        u8"训练主题：%1\n局面编码：%2\nPikafish 最佳着：%3\n主变：%4\n"
+        u8"用户实战着：%5\n画像标签：%6")
+        .arg(position.theme, position.board, position.bestMove,
+             position.principalVariation, position.actualMove,
+             position.diagnosisTag);
+    result_browser_->setHtml(QString::fromUtf8(u8"<p>正在请求 GPT-5.6 Sol 生成残局杀法讲解……</p>"));
+    ai_button_->setEnabled(false);
+    emit coachQuestionAsked(
+        coach_request_id_, evidence, QString(),
+        QString::fromUtf8(u8"请把这个残局题讲成可执行的杀法训练：先说明双方将军、吃子和直接威胁，再给出我应计算的关键分支和成功标准。"));
+}
+
+void TrainingDialog::receiveCoachReply(const QString &requestId,
+                                        const QString &answer,
+                                        const QString &errorMessage)
+{
+    if (requestId != coach_request_id_) return;
+    coach_request_id_.clear();
+    if (!errorMessage.isEmpty()) {
+        result_browser_->setHtml(QString::fromUtf8(
+            u8"<p style='color:#9b342b'>AI残局讲解失败：%1</p>")
+                                     .arg(errorMessage.toHtmlEscaped()));
+    } else {
+        result_browser_->setHtml(QString::fromUtf8(
+            u8"<h3>GPT-5.6 Sol 残局杀法训练</h3><p>%1</p>")
+                                     .arg(answer.toHtmlEscaped().replace("\n", "<br>")));
+    }
+    if (current_index_ >= 0 && current_index_ < positions_.size()) {
+        const auto &position = positions_.at(current_index_);
+        ai_button_->setEnabled(position.theme.contains(QString::fromUtf8(u8"残局"))
+                               || position.diagnosisTag == "missed_mate");
+    }
 }
 
 QString TrainingDialog::displayMove(const QString &uciMove)
