@@ -99,7 +99,7 @@ private:
     void switchUser(int comboIndex);
     void populateUsers();
     void showMilestoneReportIfNeeded();
-    void configureDeepSeek();
+    void configurePacky();
     void refreshStats();
     bool isCurrentMove(qint64 gameId, int ply, const QString &uciMove) const;
 };

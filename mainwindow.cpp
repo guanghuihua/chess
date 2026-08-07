@@ -92,15 +92,15 @@ MainWindow::MainWindow(QWidget *parent)
     trainingButton->setProperty("secondary", true);
     auto *reviewButton = new QPushButton(QString::fromUtf8(u8"对局复盘"), header);
     reviewButton->setProperty("secondary", true);
-    auto *deepSeekButton = new QPushButton(QString::fromUtf8(u8"AI 设置"), header);
-    deepSeekButton->setProperty("secondary", true);
+    auto *aiSettingsButton = new QPushButton(QString::fromUtf8(u8"AI 设置"), header);
+    aiSettingsButton->setProperty("secondary", true);
     auto *newGameButton = new QPushButton(QString::fromUtf8(u8"新对局"), header);
     newGameButton->setObjectName("primaryButton");
     headerLayout->addWidget(undoButton);
     headerLayout->addWidget(resignButton);
     headerLayout->addWidget(trainingButton);
     headerLayout->addWidget(reviewButton);
-    headerLayout->addWidget(deepSeekButton);
+    headerLayout->addWidget(aiSettingsButton);
     headerLayout->addWidget(newGameButton);
     rootLayout->addWidget(header);
 
@@ -131,7 +131,7 @@ MainWindow::MainWindow(QWidget *parent)
     engine_status_label_->setObjectName("statusPill");
     panelLayout->addWidget(engine_status_label_);
 
-    coach_status_label_ = new QLabel(QString::fromUtf8(u8"正在检查 DeepSeek 配置……"), panel);
+    coach_status_label_ = new QLabel(QString::fromUtf8(u8"正在检查 Packy 配置……"), panel);
     coach_status_label_->setWordWrap(true);
     coach_status_label_->setObjectName("statusPill");
     panelLayout->addWidget(coach_status_label_);
@@ -373,8 +373,8 @@ MainWindow::MainWindow(QWidget *parent)
             this, &MainWindow::createUser);
     connect(user_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MainWindow::switchUser);
-    connect(deepSeekButton, &QPushButton::clicked,
-            this, &MainWindow::configureDeepSeek);
+    connect(aiSettingsButton, &QPushButton::clicked,
+            this, &MainWindow::configurePacky);
     connect(difficultyCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this](int index) {
                 board_widget_->setDifficulty(
@@ -563,7 +563,7 @@ void MainWindow::handleGameEnded()
     if (advice_feed_layout_) {
         const QString progress = coach_ && coach_->isConfigured()
             ? QString::fromUtf8(u8"正在等待引擎完成剩余分析，然后生成整盘 AI 建议……")
-            : QString::fromUtf8(u8"引擎分析会继续保存；配置 DeepSeek 后可生成整盘 AI 建议。");
+            : QString::fromUtf8(u8"引擎分析会继续保存；配置 Packy 后可生成整盘 AI 建议。");
         appendAdviceCard(QString::fromUtf8(u8"本局已经结束"), progress,
                          {}, {}, QStringLiteral("notice"));
     }
@@ -735,7 +735,7 @@ void MainWindow::requestPendingGameReviews()
             localReview.model = QStringLiteral("local-engine-coach");
             localReview.overview = QString::fromUtf8(
                 u8"本局共走 %1 步，红方 %2 步得到引擎分析，平均局面损失为 %3。"
-                u8"这是依据引擎数据生成的离线总结；配置 DeepSeek 后可获得更深入的思考模式分析。")
+                u8"这是依据引擎数据生成的离线总结；配置 Packy 后可获得更深入的思考模式分析。")
                 .arg(context.totalMoves).arg(context.analyzedMoves)
                 .arg(context.averageLoss, 0, 'f', 1);
             localReview.turningPoints = context.keyMoments;
@@ -877,7 +877,7 @@ void MainWindow::sendCoachQuestion()
     if (question.isEmpty()) return;
     if (!coach_ || !coach_->isConfigured()) {
         QMessageBox::information(this, QString::fromUtf8(u8"AI 教练未启用"),
-                                 QString::fromUtf8(u8"请先在“AI 设置”中配置 DeepSeek API Key。"));
+                                 QString::fromUtf8(u8"请先在“AI 设置”中配置 Packy API Key。"));
         return;
     }
     if (current_game_id_ < 0 || coach_chat_context_.trimmed().isEmpty()) {
@@ -1153,10 +1153,10 @@ void MainWindow::showMilestoneReportIfNeeded()
     }
 }
 
-void MainWindow::configureDeepSeek()
+void MainWindow::configurePacky()
 {
     QDialog dialog(this);
-    dialog.setWindowTitle(QString::fromUtf8(u8"DeepSeek API 设置"));
+    dialog.setWindowTitle(QString::fromUtf8(u8"Packy API 设置"));
     dialog.setMinimumWidth(500);
 
     auto *layout = new QVBoxLayout(&dialog);
@@ -1198,12 +1198,12 @@ void MainWindow::configureDeepSeek()
         }
         apiKeyEdit->clear();
         resultLabel->setStyleSheet("color: #555;");
-        resultLabel->setText(QString::fromUtf8(u8"已安全保存，正在连接 DeepSeek……"));
+        resultLabel->setText(QString::fromUtf8(u8"已安全保存，正在连接 Packy……"));
         coach_->testConnection();
     });
     connect(deleteButton, &QPushButton::clicked, &dialog, [this, resultLabel] {
         if (QMessageBox::question(this, QString::fromUtf8(u8"删除密钥"),
-                                  QString::fromUtf8(u8"确定删除本机保存的 DeepSeek 密钥吗？"))
+                                  QString::fromUtf8(u8"确定删除本机保存的 Packy 密钥吗？"))
             != QMessageBox::Yes) {
             return;
         }

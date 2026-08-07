@@ -16,9 +16,6 @@
 #include <QUrl>
 
 namespace {
-const char fastModelName[] = "deepseek-v4-flash";
-const char reasoningModelName[] = "deepseek-v4-pro";
-const char endpoint[] = "https://api.deepseek.com/chat/completions";
 const char packyEndpoint[] = "https://www.packyapi.ai/v1/responses";
 const char packyFastModel[] = "gpt-5.6-sol";
 const char packyReviewModel[] = "gpt-5.6-sol";
@@ -26,7 +23,6 @@ const char packyReviewModel[] = "gpt-5.6-sol";
 
 DeepSeekCoach::DeepSeekCoach(QObject *parent)
     : QObject(parent)
-    , api_key_(QProcessEnvironment::systemEnvironment().value("DEEPSEEK_API_KEY"))
 {
     QString packyKey = QProcessEnvironment::systemEnvironment().value("PACKY_API_KEY");
     if (packyKey.isEmpty()) {
@@ -58,16 +54,16 @@ DeepSeekCoach::DeepSeekCoach(QObject *parent)
         packy_mode_ = true;
     }
     if (api_key_.isEmpty()) {
-        api_key_ = CredentialStore::readDeepSeekApiKey();
+        api_key_ = CredentialStore::readPackyApiKey();
+        packy_mode_ = !api_key_.isEmpty();
     }
     QTimer::singleShot(0, this, [this] {
         if (api_key_.isEmpty()) {
             emit statusChanged(QString::fromUtf8(
-                u8"AI 未启用：请配置 DeepSeek，或提供 PACKY_API_KEY/APIKEY"), false);
+                u8"AI 未启用：请配置 Packy API Key，或提供 PACKY_API_KEY/APIKEY"), false);
         } else {
-            emit statusChanged(packy_mode_
-                ? QString::fromUtf8(u8"Packy GPT-5.6 Sol 已启用 · 单步与整盘复盘")
-                : QString::fromUtf8(u8"DeepSeek AI 教练已启用"), true);
+            emit statusChanged(QString::fromUtf8(
+                u8"Packy GPT-5.6 Sol 已启用 · 单步与整盘复盘"), true);
         }
     });
 }
@@ -80,36 +76,36 @@ bool DeepSeekCoach::isConfigured() const
 bool DeepSeekCoach::saveApiKey(const QString &apiKey, QString *errorMessage)
 {
     const QString normalized = apiKey.trimmed();
-    if (!CredentialStore::writeDeepSeekApiKey(normalized, errorMessage)) {
+    if (!CredentialStore::writePackyApiKey(normalized, errorMessage)) {
         return false;
     }
     api_key_ = normalized;
-    packy_mode_ = false;
-    emit statusChanged(QString::fromUtf8(u8"DeepSeek 密钥已安全保存，正在测试连接……"), true);
+    packy_mode_ = true;
+    emit statusChanged(QString::fromUtf8(u8"Packy 密钥已安全保存，正在测试连接……"), true);
     return true;
 }
 
 bool DeepSeekCoach::removeApiKey(QString *errorMessage)
 {
-    if (!CredentialStore::removeDeepSeekApiKey(errorMessage)) {
+    if (!CredentialStore::removePackyApiKey(errorMessage)) {
         return false;
     }
     api_key_.clear();
-    emit statusChanged(QString::fromUtf8(u8"DeepSeek 密钥已删除"), false);
+    packy_mode_ = false;
+    emit statusChanged(QString::fromUtf8(u8"Packy 密钥已删除"), false);
     return true;
 }
 
 void DeepSeekCoach::testConnection()
 {
     if (api_key_.isEmpty()) {
-        const QString message = QString::fromUtf8(u8"尚未配置 DeepSeek API Key");
+        const QString message = QString::fromUtf8(u8"尚未配置 Packy API Key");
         emit statusChanged(message, false);
         emit connectionTested(false, message);
         return;
     }
 
-    const QUrl modelsUrl(packy_mode_ ? "https://www.packyapi.ai/v1/models"
-                                     : "https://api.deepseek.com/models");
+    const QUrl modelsUrl(QStringLiteral("https://www.packyapi.ai/v1/models"));
     QNetworkRequest request(modelsUrl);
     request.setRawHeader("Authorization", "Bearer " + api_key_.toUtf8());
     request.setTransferTimeout(20000);
@@ -136,10 +132,9 @@ void DeepSeekCoach::testConnection()
 
         const bool success = networkOk && modelFound;
         const QString message = success
-            ? (packy_mode_ ? QString::fromUtf8(u8"连接成功：GPT-5.6 Sol 可用")
-                           : QString::fromUtf8(u8"连接成功：DeepSeek V4 Flash 可用"))
+            ? QString::fromUtf8(u8"连接成功：GPT-5.6 Sol 可用")
             : (networkOk
-                   ? QString::fromUtf8(u8"连接成功，但账号暂时不可用 DeepSeek V4 Flash")
+                   ? QString::fromUtf8(u8"连接成功，但账号暂时不可用 GPT-5.6 Sol")
                    : QString::fromUtf8(u8"连接失败：") + networkError);
         emit statusChanged(message, success);
         emit connectionTested(success, message);
@@ -176,7 +171,7 @@ void DeepSeekCoach::requestChat(const QString &requestId,
 {
     if (api_key_.isEmpty() || requestId.isEmpty() || question.trimmed().isEmpty()) {
         emit chatReplyReady(requestId, QString(),
-                            QString::fromUtf8(u8"DeepSeek 尚未配置或问题为空"));
+                            QString::fromUtf8(u8"Packy 尚未配置或问题为空"));
         return;
     }
     chat_requests_.enqueue(ChatRequest{requestId, evidenceContext,
@@ -199,7 +194,7 @@ void DeepSeekCoach::processNext()
     QNetworkRequest networkRequest(activeEndpoint());
     networkRequest.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
     networkRequest.setRawHeader("Authorization", "Bearer " + api_key_.toUtf8());
-    networkRequest.setTransferTimeout(packy_mode_ ? 90000 : 45000);
+    networkRequest.setTransferTimeout(90000);
 
     emit statusChanged(QString::fromUtf8(u8"AI 正在结合完整棋谱生成第 %1 步讲解……")
                            .arg(requestData.analysis.ply), true);
@@ -243,7 +238,7 @@ void DeepSeekCoach::processNextGameReview()
     QNetworkRequest networkRequest(activeEndpoint());
     networkRequest.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
     networkRequest.setRawHeader("Authorization", "Bearer " + api_key_.toUtf8());
-    networkRequest.setTransferTimeout(packy_mode_ ? 120000 : 60000);
+    networkRequest.setTransferTimeout(120000);
 
     emit statusChanged(QString::fromUtf8(u8"AI 正在生成第 %1 盘的整盘复盘……")
                            .arg(requestData.context.gameId), true);
@@ -414,7 +409,7 @@ QByteArray DeepSeekCoach::makeChatRequestBody(const ChatRequest &request)
         .arg(request.evidenceContext.left(12000),
              request.conversationHistory.right(6000), request.question);
     QJsonObject body;
-    body["model"] = QString::fromLatin1(reasoningModelName);
+    body["model"] = QString::fromLatin1(packyFastModel);
     body["stream"] = false;
     body["max_tokens"] = 520;
     body["temperature"] = 0.2;
@@ -428,25 +423,22 @@ QByteArray DeepSeekCoach::makeChatRequestBody(const ChatRequest &request)
 
 QString DeepSeekCoach::activeFastModel() const
 {
-    return packy_mode_ ? QString::fromLatin1(packyFastModel)
-                       : QString::fromLatin1(fastModelName);
+    return QString::fromLatin1(packyFastModel);
 }
 
 QString DeepSeekCoach::activeReviewModel() const
 {
-    return packy_mode_ ? QString::fromLatin1(packyReviewModel)
-                       : QString::fromLatin1(reasoningModelName);
+    return QString::fromLatin1(packyReviewModel);
 }
 
 QUrl DeepSeekCoach::activeEndpoint() const
 {
-    return QUrl(QString::fromLatin1(packy_mode_ ? packyEndpoint : endpoint));
+    return QUrl(QString::fromLatin1(packyEndpoint));
 }
 
 QByteArray DeepSeekCoach::providerRequestBody(
     const QByteArray &chatCompletionsBody, bool wholeGame) const
 {
-    if (!packy_mode_) return chatCompletionsBody;
     const QJsonObject chat = QJsonDocument::fromJson(chatCompletionsBody).object();
     QString instructions;
     QJsonArray input;
@@ -478,7 +470,6 @@ QByteArray DeepSeekCoach::providerRequestBody(
 
 QByteArray DeepSeekCoach::normalizedResponseBody(const QByteArray &body) const
 {
-    if (!packy_mode_) return body;
     QString combined;
     QString providerError;
     const auto consumeEvent = [&combined, &providerError](const QJsonObject &event) {
@@ -589,7 +580,7 @@ QByteArray DeepSeekCoach::makeRequestBody(const Request &request)
                                            : request.gameContext);
 
     QJsonObject body;
-    body["model"] = QString::fromLatin1(fastModelName);
+    body["model"] = QString::fromLatin1(packyFastModel);
     body["stream"] = false;
     body["max_tokens"] = 420;
     body["temperature"] = 0.15;
@@ -646,7 +637,7 @@ QByteArray DeepSeekCoach::makeGameReviewRequestBody(
         .arg(stats.undoEvents).arg(stats.blunderUndoEvents);
 
     QJsonObject body;
-    body["model"] = QString::fromLatin1(reasoningModelName);
+    body["model"] = QString::fromLatin1(packyReviewModel);
     body["stream"] = false;
     body["max_tokens"] = 1300;
     body["temperature"] = request.attempt == 0 ? 0.15 : 0.0;
@@ -714,7 +705,7 @@ bool DeepSeekCoach::parseCoachingContent(const QByteArray &body,
     result->gameId = request.analysis.gameId;
     result->ply = request.analysis.ply;
     result->actualMove = request.analysis.actualMove;
-    result->model = QString::fromLatin1(fastModelName);
+    result->model = QString::fromLatin1(packyFastModel);
     result->diagnosis = diagnosis;
     result->evidence = evidence;
     result->trainingTask = trainingTask;
@@ -774,7 +765,7 @@ bool DeepSeekCoach::parseGameReviewContent(
 
     result->gameId = request.context.gameId;
     result->userId = request.context.userId;
-    result->model = QString::fromLatin1(reasoningModelName);
+    result->model = QString::fromLatin1(packyReviewModel);
     result->overview = overview;
     result->turningPoints = turningPoints;
     result->strengths = strengths;
