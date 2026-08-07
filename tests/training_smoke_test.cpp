@@ -108,6 +108,11 @@ int main(int argc, char *argv[])
             application.exit(10);
             return;
         }
+        if (database.unattemptedGeneratedTrainingPositionCount(1) < 1) {
+            qCritical() << "Generated exercise reserve count was incorrect";
+            application.exit(10);
+            return;
+        }
         if (database.trainingLibraryPositions(1, 1000).isEmpty()) {
             qCritical() << "Training library query returned no positions";
             application.exit(10);

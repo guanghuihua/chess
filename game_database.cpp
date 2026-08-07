@@ -932,6 +932,18 @@ QVector<GameDatabase::TrainingPosition> GameDatabase::trainingLibraryPositions(
     return positions;
 }
 
+int GameDatabase::unattemptedGeneratedTrainingPositionCount(qint64 userId) const
+{
+    QSqlQuery query(database_);
+    query.prepare(
+        "SELECT COUNT(*) FROM training_positions p JOIN games g ON g.id=p.source_game_id "
+        "WHERE g.user_id=? AND p.source_ply<0 AND NOT EXISTS "
+        "(SELECT 1 FROM training_attempts t WHERE t.training_position_id=p.id)");
+    query.addBindValue(userId);
+    if (!query.exec() || !query.next()) return 0;
+    return query.value(0).toInt();
+}
+
 QString GameDatabase::trainingGenerationContext(qint64 userId) const
 {
     const TrainingStats stats = trainingStats(userId);

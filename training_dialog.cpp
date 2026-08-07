@@ -18,6 +18,10 @@
 #include <QVBoxLayout>
 #include <QUuid>
 
+namespace {
+constexpr int kGeneratedExerciseReserve = 3;
+}
+
 TrainingDialog::TrainingDialog(GameDatabase *database, qint64 userId, QWidget *parent)
     : QDialog(parent)
     , database_(database)
@@ -310,6 +314,7 @@ void TrainingDialog::confirmCurrentMove()
     next_button_->setText(QString::fromUtf8(u8"下一题"));
     next_button_->setEnabled(true);
     requestAutomaticCoaching(submittedMove, correct);
+    requestBackgroundExercise();
 }
 
 void TrainingDialog::undoCurrentMove()
@@ -350,6 +355,9 @@ void TrainingDialog::undoCurrentMove()
                               u8"棋盘已回到题目前状态，不会重复计入错误。现在可以重新计算并落子。</p>")
         : QString::fromUtf8(u8"<h3>已悔棋</h3><p>这一步已撤回。按照训练规则，悔棋代表这次计算尚不确定，"
                               u8"已按一次错误尝试写入个人训练统计；请重新计算后再确认作答。</p>"));
+    if (!alreadyRecorded) {
+        requestBackgroundExercise();
+    }
 }
 
 void TrainingDialog::requestWrongLineReview()
@@ -532,6 +540,10 @@ void TrainingDialog::requestGeneratedExercise()
 void TrainingDialog::requestBackgroundExercise()
 {
     if (!generation_request_id_.isEmpty() || !background_generation_request_id_.isEmpty()) return;
+    if (!database_ || database_->unattemptedGeneratedTrainingPositionCount(user_id_)
+                         >= kGeneratedExerciseReserve) {
+        return;
+    }
     background_generation_request_id_ = QStringLiteral("background-training-")
         + QUuid::createUuid().toString(QUuid::WithoutBraces);
     emit generatedExerciseRequested(background_generation_request_id_);

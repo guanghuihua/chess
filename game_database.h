@@ -311,6 +311,7 @@ public:
     QVector<TrainingPosition> dueTrainingPositions(qint64 userId, int limit = 10) const;
     QVector<TrainingPosition> trainingLibraryPositions(qint64 userId,
                                                        int limit = 200) const;
+    int unattemptedGeneratedTrainingPositionCount(qint64 userId) const;
     bool recordTrainingAttempt(qint64 positionId, const QString &attemptedMove,
                                bool correct, qint64 thinkingTimeMs,
                                QString *errorMessage = nullptr);
