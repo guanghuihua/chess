@@ -61,7 +61,7 @@ TrainingDialog::TrainingDialog(GameDatabase *database, qint64 userId, QWidget *p
     panelLayout->addWidget(source_label_);
 
     auto *instruction = new QLabel(QString::fromUtf8(
-        u8"请重新思考这个历史局面，然后直接在棋盘上走出你认为最好的着法。"), panel);
+        u8"根据局面找出最好的着法，然后直接在棋盘上落子。"), panel);
     instruction->setWordWrap(true);
     panelLayout->addWidget(instruction);
 
@@ -157,7 +157,10 @@ void TrainingDialog::loadCurrentPosition()
                                  .arg(positions_.size())
                                  .arg(position.mastery));
     QString sourceKind = QString::fromUtf8(u8"画像专项");
-    if (position.diagnosisTag == "undo_behavior") {
+    const bool isProfileVariation = position.theme.contains(QString::fromUtf8(u8"画像变式"));
+    if (isProfileVariation) {
+        sourceKind = QString::fromUtf8(u8"画像原创变式");
+    } else if (position.diagnosisTag == "undo_behavior") {
         sourceKind = QString::fromUtf8(u8"悔棋证据");
     } else if (position.diagnosisTag == "missed_mate"
                || position.theme.contains(QString::fromUtf8(u8"残局"))) {
@@ -165,10 +168,12 @@ void TrainingDialog::loadCurrentPosition()
     }
     theme_label_->setText(QString::fromUtf8(u8"训练主题：") + position.theme
                           + QString::fromUtf8(u8" · ") + sourceKind);
+    const int originPly = isProfileVariation ? position.sourcePly % 1000000
+                                              : position.sourcePly;
     source_label_->setText(QString::fromUtf8(
-        u8"来自你的第 %1 盘、第 %2 步 · 当时局面损失 %3 · 已练习 %4 次")
+        u8"关联你的第 %1 盘、第 %2 步 · 当时局面损失 %3 · 已练习 %4 次")
         .arg(position.sourceGameId)
-        .arg(position.sourcePly)
+        .arg(originPly)
         .arg(position.scoreLoss)
         .arg(position.attempts)
         + QString::fromUtf8(u8"\n推荐原因：") + position.recommendationReason);
@@ -211,10 +216,12 @@ void TrainingDialog::handleMove(const QString &uciMove)
             u8"你在实战中的走法：<b>%3</b></p>"
             u8"<p><b>Pikafish 推荐变化</b><br><code>%4</code></p>"
             u8"<p style='color:#746d63'>%5</p>")
-            .arg(displayMove(uciMove).toHtmlEscaped(),
-                 displayMove(position.bestMove).toHtmlEscaped(),
-                 displayMove(position.actualMove).toHtmlEscaped(),
-                 position.principalVariation.toHtmlEscaped(),
+            .arg(displayMove(position.board, uciMove).toHtmlEscaped(),
+                 displayMove(position.board, position.bestMove).toHtmlEscaped(),
+                 position.actualMove.isEmpty()
+                     ? QString::fromUtf8(u8"本题为画像变式，没有历史实战着")
+                     : displayMove(position.board, position.actualMove).toHtmlEscaped(),
+                 displayVariation(position.board, position.principalVariation).toHtmlEscaped(),
                  correct
                      ? (hint_count_ == 0
                             ? QString::fromUtf8(u8"独立答对：掌握度上升，并进入间隔复习计划。")
@@ -248,9 +255,7 @@ void TrainingDialog::showHint()
     } else {
         const QString notation = PikafishAnalyzer::toChineseNotation(
             position.board.toStdString(), XiangqiGame::Side::Red, position.bestMove);
-        const QString variation = PikafishAnalyzer::toChinesePrincipalVariation(
-            position.board.toStdString(), XiangqiGame::Side::Red,
-            position.principalVariation);
+        const QString variation = displayVariation(position.board, position.principalVariation);
         hint = QString::fromUtf8(
             u8"计算提示：推荐着是 <b>%1</b>；关键变化为：%2。请先解释为什么，再落子。").arg(
             notation.toHtmlEscaped(), variation.toHtmlEscaped());
@@ -296,10 +301,14 @@ void TrainingDialog::requestEndgameCoaching()
         u8"请只根据给定证据讲解，不要编造未提供的着法。\n"
         u8"训练主题：%1\n局面编码：%2\nPikafish 最佳着：%3\n主变：%4\n"
         u8"用户实战着：%5\n画像标签：%6")
-        .arg(position.theme, position.board, position.bestMove,
-             position.principalVariation, position.actualMove,
+        .arg(position.theme, position.board,
+             displayMove(position.board, position.bestMove),
+             displayVariation(position.board, position.principalVariation),
+             position.actualMove.isEmpty()
+                 ? QString::fromUtf8(u8"无：这是画像变式题")
+                 : displayMove(position.board, position.actualMove),
              position.diagnosisTag);
-    result_browser_->setHtml(QString::fromUtf8(u8"<p>正在请求 GPT-5.6 Sol 生成残局杀法讲解……</p>"));
+    result_browser_->setHtml(QString::fromUtf8(u8"<p>正在请求 GPT-5.6 Terra 生成残局杀法讲解……</p>"));
     ai_button_->setEnabled(false);
     emit coachQuestionAsked(
         coach_request_id_, evidence, QString(),
@@ -318,7 +327,7 @@ void TrainingDialog::receiveCoachReply(const QString &requestId,
                                      .arg(errorMessage.toHtmlEscaped()));
     } else {
         result_browser_->setHtml(QString::fromUtf8(
-            u8"<h3>GPT-5.6 Sol 残局杀法训练</h3><p>%1</p>")
+            u8"<h3>GPT-5.6 Terra 残局杀法训练</h3><p>%1</p>")
                                      .arg(answer.toHtmlEscaped().replace("\n", "<br>")));
     }
     if (current_index_ >= 0 && current_index_ < positions_.size()) {
@@ -328,10 +337,19 @@ void TrainingDialog::receiveCoachReply(const QString &requestId,
     }
 }
 
-QString TrainingDialog::displayMove(const QString &uciMove)
+QString TrainingDialog::displayMove(const QString &board, const QString &uciMove)
 {
-    if (uciMove.size() < 4) {
+    if (uciMove.size() != 4) {
         return uciMove;
     }
-    return uciMove.left(2) + QString::fromUtf8(u8" → ") + uciMove.mid(2, 2);
+    return PikafishAnalyzer::toChineseNotation(
+        board.toStdString(), XiangqiGame::Side::Red, uciMove);
+}
+
+QString TrainingDialog::displayVariation(const QString &board, const QString &variation)
+{
+    const QStringList moves = variation.split(' ', Qt::SkipEmptyParts);
+    if (moves.isEmpty() || moves.front().size() != 4) return variation;
+    return PikafishAnalyzer::toChinesePrincipalVariation(
+        board.toStdString(), XiangqiGame::Side::Red, variation);
 }

@@ -280,6 +280,12 @@ public:
                         int scoreLoss, const QString &category,
                         const QString &principalVariation,
                         QString *errorMessage = nullptr);
+    bool recordAnalysis(qint64 gameId, int ply, const QString &actualMove,
+                        const QString &bestMove, int bestScore, int actualScore,
+                        int scoreLoss, const QString &category,
+                        const QString &principalVariation,
+                        const QString &rawPrincipalVariation,
+                        QString *errorMessage = nullptr);
     bool recordCoaching(qint64 gameId, int ply, const QString &model,
                         const QString &diagnosis, const QString &evidence,
                         const QString &trainingTask,

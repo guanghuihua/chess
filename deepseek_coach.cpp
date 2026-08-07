@@ -17,7 +17,7 @@
 
 namespace {
 const char packyEndpoint[] = "https://www.packyapi.ai/v1/responses";
-const char packyFastModel[] = "gpt-5.6-sol";
+const char packyFastModel[] = "gpt-5.6-terra";
 const char packyReviewModel[] = "gpt-5.6-sol";
 }
 
@@ -63,7 +63,7 @@ DeepSeekCoach::DeepSeekCoach(QObject *parent)
                 u8"AI 未启用：请配置 Packy API Key，或提供 PACKY_API_KEY/APIKEY"), false);
         } else {
             emit statusChanged(QString::fromUtf8(
-                u8"Packy GPT-5.6 Sol 已启用 · 单步与整盘复盘"), true);
+                u8"Packy 已启用 · Terra 用于即时讲解，Sol 用于整盘复盘"), true);
         }
     });
 }
@@ -132,9 +132,9 @@ void DeepSeekCoach::testConnection()
 
         const bool success = networkOk && modelFound;
         const QString message = success
-            ? QString::fromUtf8(u8"连接成功：GPT-5.6 Sol 可用")
+            ? QString::fromUtf8(u8"连接成功：GPT-5.6 Terra 与 Sol 可用")
             : (networkOk
-                   ? QString::fromUtf8(u8"连接成功，但账号暂时不可用 GPT-5.6 Sol")
+                    ? QString::fromUtf8(u8"连接成功，但账号暂时不可用 GPT-5.6 Terra")
                    : QString::fromUtf8(u8"连接失败：") + networkError);
         emit statusChanged(message, success);
         emit connectionTested(success, message);
@@ -403,7 +403,8 @@ QByteArray DeepSeekCoach::makeChatRequestBody(const ChatRequest &request)
         u8"Pikafish 引擎证据优先于语言推测；不要修改评分、最佳着或推荐变化，也不要编造未提供的计算。"
         u8"总长度不超过 220 个汉字，只写四项：1. 错在哪；2. 对手如何惩罚；3. 推荐着解决什么；4. 下次检查什么。"
         u8"每项最多两句。禁止寒暄、鼓励、复述用户问题、重复整段评分、空泛地说‘加强计算’或‘注意局面’。"
-        u8"必须把建议落到具体棋子、线路、先后手或将军/吃子/威胁；证据不足就用一句话指出缺少什么。");
+        u8"必须把建议落到具体棋子、线路、先后手或将军/吃子/威胁；证据不足就用一句话指出缺少什么。"
+        u8"禁止输出 a0-i9、f5-c3 等坐标着法；所有走法必须使用中文棋谱，例如车九进一。");
     const QString userPrompt = QString::fromUtf8(
         u8"【当前棋局证据】\n%1\n\n【此前对话】\n%2\n\n【学习者的新问题】\n%3")
         .arg(request.evidenceContext.left(12000),
@@ -548,7 +549,8 @@ QByteArray DeepSeekCoach::makeRequestBody(const Request &request)
         u8"evidence：100字以内，从给定推荐变化中截取最关键的2至6个半回合，用中文着法说明具体后果；"
         u8"training_task：80字以内，解释推荐着法的真实目的，以及它相对实战着改善了什么；"
         u8"reflection_question：45字以内，写成肯定句，给出本类局面的实战判定标准，不要使用问号。"
-        u8"JSON 字段名必须保持 diagnosis、evidence、training_task、reflection_question，不要输出 Markdown。");
+        u8"JSON 字段名必须保持 diagnosis、evidence、training_task、reflection_question，不要输出 Markdown。"
+        u8"禁止输出 a0-i9、f5-c3 等坐标着法；所有走法必须使用中文棋谱，例如车九进一。");
 
     const QString userPrompt = QString::fromUtf8(
         u8"请根据以下结构化证据输出 JSON 教练建议：\n"
@@ -611,7 +613,8 @@ QByteArray DeepSeekCoach::makeGameReviewRequestBody(
         u8"training_plan：恰好2项任务，每项包含训练次数和成功标准；reflection_question：只问一个关键漏算点，30字以内。"
         u8"示例 JSON：{\"overview\":\"...\",\"turning_points\":\"...\","
         u8"\"strengths\":\"...\",\"recurring_pattern\":\"...\","
-        u8"\"training_plan\":\"1. ...；2. ...\",\"reflection_question\":\"...\"}");
+        u8"\"training_plan\":\"1. ...；2. ...\",\"reflection_question\":\"...\"}"
+        u8"禁止输出 a0-i9、f5-c3 等坐标着法；所有走法必须使用中文棋谱，例如车九进一。");
 
     const QString userPrompt = QString::fromUtf8(
         u8"请根据以下证据完成整盘复盘。\n"

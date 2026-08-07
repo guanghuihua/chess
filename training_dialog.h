@@ -53,7 +53,8 @@ private:
     void showHint();
     void nextPosition();
     void requestEndgameCoaching();
-    static QString displayMove(const QString &uciMove);
+    static QString displayMove(const QString &board, const QString &uciMove);
+    static QString displayVariation(const QString &board, const QString &variation);
 };
 
 #endif // TRAINING_DIALOG_H

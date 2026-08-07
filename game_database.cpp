@@ -1,4 +1,5 @@
 #include "game_database.h"
+#include "pikafish_analyzer.h"
 
 #include <algorithm>
 
@@ -11,6 +12,38 @@
 #include <QStringList>
 #include <QUuid>
 #include <QVariant>
+
+namespace {
+
+constexpr int kVariationPlyOffset = 1000000;
+
+bool applyUciMove(XiangqiGame *position, const QString &uciMove)
+{
+    if (!position || uciMove.size() != 4) return false;
+    const int fromCol = uciMove.at(0).unicode() - QChar('a').unicode();
+    const int fromRow = QChar('9').unicode() - uciMove.at(1).unicode();
+    const int toCol = uciMove.at(2).unicode() - QChar('a').unicode();
+    const int toRow = QChar('9').unicode() - uciMove.at(3).unicode();
+    return XiangqiGame::inBounds(fromRow, fromCol)
+           && XiangqiGame::inBounds(toRow, toCol)
+           && position->isLegalMove(fromRow, fromCol, toRow, toCol)
+           && position->move(fromRow, fromCol, toRow, toCol);
+}
+
+QString variationTheme(const QString &tag)
+{
+    static const QMap<QString, QString> titles = {
+        {QStringLiteral("missed_mate"), QString::fromUtf8(u8"将杀计算")},
+        {QStringLiteral("endgame_technique"), QString::fromUtf8(u8"残局技术")},
+        {QStringLiteral("missed_threat"), QString::fromUtf8(u8"威胁识别")},
+        {QStringLiteral("calculation_depth"), QString::fromUtf8(u8"连续计算")},
+        {QStringLiteral("candidate_moves"), QString::fromUtf8(u8"候选着比较")}
+    };
+    return QString::fromUtf8(u8"画像变式：")
+           + titles.value(tag, QString::fromUtf8(u8"局面判断"));
+}
+
+} // namespace
 
 GameDatabase::GameDatabase()
     : connection_name_("xiangqi-training-" + QUuid::createUuid().toString(QUuid::WithoutBraces))
@@ -80,7 +113,7 @@ bool GameDatabase::executeSchema(QString *errorMessage)
         "id INTEGER PRIMARY KEY AUTOINCREMENT, game_id INTEGER NOT NULL, ply INTEGER NOT NULL, "
         "actual_move TEXT NOT NULL, best_move TEXT NOT NULL, best_score INTEGER NOT NULL, "
         "actual_score INTEGER NOT NULL, score_loss INTEGER NOT NULL, category TEXT NOT NULL, "
-        "principal_variation TEXT, analyzed_at TEXT NOT NULL, "
+        "principal_variation TEXT, raw_principal_variation TEXT, analyzed_at TEXT NOT NULL, "
         "UNIQUE(game_id, ply), FOREIGN KEY(game_id) REFERENCES games(id))",
 
         "CREATE TABLE IF NOT EXISTS coaching ("
@@ -257,6 +290,9 @@ bool GameDatabase::executeSchema(QString *errorMessage)
         || !ensureColumn("undo_events", "evidence", "TEXT NOT NULL DEFAULT ''")
         || !ensureColumn("undo_events", "training_task", "TEXT NOT NULL DEFAULT ''")
         || !ensureColumn("undo_events", "reflection_question", "TEXT NOT NULL DEFAULT ''")) {
+        return false;
+    }
+    if (!ensureColumn("analyses", "raw_principal_variation", "TEXT NOT NULL DEFAULT ''")) {
         return false;
     }
     QSqlQuery index(database_);
@@ -730,6 +766,77 @@ int GameDatabase::generateTrainingPositions(qint64 userId, QString *errorMessage
         return -1;
     }
     inserted += undoQuery.numRowsAffected();
+
+    // Generate a new red-to-move position after the engine's best move and
+    // best reply. Every PV move is checked by XiangqiGame before insertion.
+    QSqlQuery variationSource(database_);
+    variationSource.prepare(
+        "SELECT a.game_id,a.ply,m.board_before,a.raw_principal_variation,"
+        "COALESCE((SELECT dt.tag FROM diagnosis_tags dt WHERE dt.game_id=a.game_id "
+        "AND dt.ply=a.ply ORDER BY dt.confidence DESC,dt.id LIMIT 1),'unknown'),"
+        "a.score_loss,a.category FROM analyses a "
+        "JOIN moves m ON m.game_id=a.game_id AND m.ply=a.ply "
+        "JOIN games g ON g.id=a.game_id WHERE g.user_id=? AND m.side='red' "
+        "AND a.score_loss>30 AND a.raw_principal_variation<>'' ORDER BY "
+        "CASE WHEN EXISTS (SELECT 1 FROM training_plan_items tpi "
+        "WHERE tpi.diagnosis_tag=(SELECT dt.tag FROM diagnosis_tags dt "
+        "WHERE dt.game_id=a.game_id AND dt.ply=a.ply "
+        "ORDER BY dt.confidence DESC,dt.id LIMIT 1) AND tpi.plan_id=(SELECT id "
+        "FROM training_plans WHERE user_id=? ORDER BY through_games DESC,id DESC LIMIT 1)) "
+        "THEN 0 ELSE 1 END,a.score_loss DESC,a.id DESC LIMIT 20");
+    variationSource.addBindValue(userId);
+    variationSource.addBindValue(userId);
+    if (!variationSource.exec()) {
+        if (errorMessage) *errorMessage = variationSource.lastError().text();
+        return -1;
+    }
+    while (variationSource.next()) {
+        const qint64 sourceGameId = variationSource.value(0).toLongLong();
+        const int sourcePly = variationSource.value(1).toInt();
+        const QString board = variationSource.value(2).toString();
+        const QStringList pv = variationSource.value(3).toString().split(' ', Qt::SkipEmptyParts);
+        if (pv.size() < 3) continue;
+
+        XiangqiGame variation;
+        if (!variation.loadPosition(board.toStdString(), XiangqiGame::Side::Red)
+            || !applyUciMove(&variation, pv.at(0))
+            || !applyUciMove(&variation, pv.at(1))
+            || variation.sideToMove() != XiangqiGame::Side::Red) {
+            continue;
+        }
+        const QString answer = pv.at(2);
+        const std::string variationBoard = variation.boardString();
+        const QString chinesePv = PikafishAnalyzer::toChinesePrincipalVariation(
+            variationBoard, XiangqiGame::Side::Red, pv.mid(2).join(' '));
+        const QString tag = variationSource.value(4).toString();
+        QSqlQuery insertVariation(database_);
+        insertVariation.prepare(
+            "INSERT OR IGNORE INTO training_positions(source_game_id,source_ply,board,"
+            "best_move,actual_move,score_loss,category,principal_variation,theme,"
+            "diagnosis_tag,recommendation_reason,mastery,next_review_at,created_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+        insertVariation.addBindValue(sourceGameId);
+        insertVariation.addBindValue(kVariationPlyOffset + sourcePly);
+        insertVariation.addBindValue(QString::fromStdString(variationBoard));
+        insertVariation.addBindValue(answer);
+        insertVariation.addBindValue(QStringLiteral(""));
+        insertVariation.addBindValue(variationSource.value(5));
+        insertVariation.addBindValue(variationSource.value(6));
+        insertVariation.addBindValue(chinesePv);
+        insertVariation.addBindValue(variationTheme(tag));
+        insertVariation.addBindValue(tag);
+        insertVariation.addBindValue(QString::fromUtf8(
+            u8"基于你的画像弱项，从 Pikafish 主变推演出新的红方决策局面；"
+            u8"局面与答案已由规则引擎逐步验证。"));
+        insertVariation.addBindValue(0);
+        insertVariation.addBindValue(QVariant());
+        insertVariation.addBindValue(now);
+        if (!insertVariation.exec()) {
+            if (errorMessage) *errorMessage = insertVariation.lastError().text();
+            return -1;
+        }
+        inserted += insertVariation.numRowsAffected();
+    }
     return inserted;
 }
 
@@ -748,6 +855,7 @@ QVector<GameDatabase::TrainingPosition> GameDatabase::dueTrainingPositions(qint6
         "ON t.training_position_id = p.id "
         "WHERE g.user_id = ? AND (p.next_review_at IS NULL OR p.next_review_at <= ?) "
         "GROUP BY p.id ORDER BY "
+        "CASE WHEN p.source_ply >= 1000000 THEN 0 ELSE 1 END, "
         "CASE WHEN p.diagnosis_tag IN (SELECT diagnosis_tag FROM training_plan_items "
         "WHERE plan_id=(SELECT id FROM training_plans WHERE user_id=? "
         "ORDER BY through_games DESC, id DESC LIMIT 1)) THEN 0 ELSE 1 END, "
@@ -829,6 +937,7 @@ bool GameDatabase::recordTrainingAttempt(qint64 positionId,
         return false;
     }
     const int oldMastery = masteryQuery.value(0).toInt();
+    masteryQuery.finish();
     const int newMastery = correct && hintCount < 3 ? std::min(5, oldMastery + 1)
                                    : std::max(0, oldMastery - 1);
     int reviewDays = 0;
@@ -846,9 +955,13 @@ bool GameDatabase::recordTrainingAttempt(qint64 positionId,
     update.addBindValue(newMastery);
     update.addBindValue(nextReview);
     update.addBindValue(positionId);
-    if (!update.exec() || !database_.commit()) {
+    if (!update.exec()) {
         database_.rollback();
         if (errorMessage) *errorMessage = update.lastError().text();
+        return false;
+    }
+    if (!database_.commit()) {
+        if (errorMessage) *errorMessage = database_.lastError().text();
         return false;
     }
     return true;
@@ -1211,11 +1324,22 @@ bool GameDatabase::recordAnalysis(qint64 gameId, int ply, const QString &actualM
                                   const QString &principalVariation,
                                   QString *errorMessage)
 {
+    return recordAnalysis(gameId, ply, actualMove, bestMove, bestScore, actualScore,
+                          scoreLoss, category, principalVariation, QString(), errorMessage);
+}
+
+bool GameDatabase::recordAnalysis(qint64 gameId, int ply, const QString &actualMove,
+                                  const QString &bestMove, int bestScore, int actualScore,
+                                  int scoreLoss, const QString &category,
+                                  const QString &principalVariation,
+                                  const QString &rawPrincipalVariation,
+                                  QString *errorMessage)
+{
     QSqlQuery query(database_);
     query.prepare(
         "INSERT OR REPLACE INTO analyses(game_id, ply, actual_move, best_move, best_score, "
-        "actual_score, score_loss, category, principal_variation, analyzed_at) "
-        "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+        "actual_score, score_loss, category, principal_variation, raw_principal_variation, "
+        "analyzed_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
     query.addBindValue(gameId);
     query.addBindValue(ply);
     query.addBindValue(actualMove);
@@ -1225,6 +1349,7 @@ bool GameDatabase::recordAnalysis(qint64 gameId, int ply, const QString &actualM
     query.addBindValue(scoreLoss);
     query.addBindValue(category);
     query.addBindValue(principalVariation);
+    query.addBindValue(rawPrincipalVariation);
     query.addBindValue(QDateTime::currentDateTime().toString(Qt::ISODateWithMs));
     if (!query.exec()) {
         if (errorMessage) {
@@ -1793,7 +1918,7 @@ bool GameDatabase::rebuildPersonalization(qint64 userId, QString *errorMessage)
         "AND dt.ply=training_positions.source_ply "
         "ORDER BY dt.confidence DESC,dt.id LIMIT 1),'unknown'), "
         "recommendation_reason='来自用户真实对局；系统依据重复错误标签和当前画像安排' "
-        "WHERE source_game_id IN (SELECT id FROM games WHERE user_id=?)");
+        "WHERE source_ply < 1000000 AND source_game_id IN (SELECT id FROM games WHERE user_id=?)");
     updatePositions.addBindValue(userId);
     if (!updatePositions.exec()) return fail(updatePositions);
 

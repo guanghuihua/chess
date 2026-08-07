@@ -596,7 +596,8 @@ void MainWindow::handleAnalysis(const PikafishAnalyzer::AnalysisResult &result)
     if (!database_.recordAnalysis(result.gameId, result.ply, result.actualMove,
                                   result.bestMove, result.bestScore, result.actualScore,
                                   result.scoreLoss, result.category,
-                                  result.principalVariation, &error)) {
+                                  result.principalVariation, result.rawPrincipalVariation,
+                                  &error)) {
         engine_status_label_->setText(QString::fromUtf8(u8"保存分析失败：") + error);
     }
     database_.generateTrainingPositions(active_user_id_);

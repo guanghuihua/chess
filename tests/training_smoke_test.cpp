@@ -77,7 +77,8 @@ int main(int argc, char *argv[])
                                          : result.bestMove;
         if (!database.recordAnalysis(
                 result.gameId, result.ply, result.actualMove, trainingBest,
-                120, 0, 120, "mistake", trainingBest, &error)) {
+                120, 0, 120, "mistake", trainingBest,
+                "a3a4 a6a5 b3b4", &error)) {
             qCritical() << "Training analysis setup failed:" << error;
             application.exit(8);
             return;
@@ -87,10 +88,17 @@ int main(int argc, char *argv[])
             application.exit(9);
             return;
         }
-        const auto positions = database.dueTrainingPositions(1, 5);
-        if (positions.isEmpty() ||
-            !database.recordTrainingAttempt(positions.front().id,
-                                            positions.front().bestMove,
+        const auto positions = database.dueTrainingPositions(1, 1000);
+        auto profileVariation = positions.cend();
+        for (auto it = positions.cbegin(); it != positions.cend(); ++it) {
+            if (it->theme.contains(QString::fromUtf8(u8"画像变式"))) {
+                profileVariation = it;
+                break;
+            }
+        }
+        if (positions.isEmpty() || profileVariation == positions.cend() ||
+            !database.recordTrainingAttempt(profileVariation->id,
+                                            profileVariation->bestMove,
                                             true, 2500, &error)) {
             qCritical() << "Training attempt failed:" << error;
             application.exit(10);

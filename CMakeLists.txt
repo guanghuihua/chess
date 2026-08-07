@@ -169,6 +169,8 @@ add_executable(multi_user_profile_test
     tests/multi_user_profile_test.cpp
     game_database.cpp
     game_database.h
+    pikafish_analyzer.cpp
+    pikafish_analyzer.h
     xiangqi_game.cpp
     xiangqi_game.h
 )
