@@ -1020,6 +1020,56 @@ void MainWindow::startPersonalTraining()
             coach_, &DeepSeekCoach::requestChat);
     connect(coach_, &DeepSeekCoach::chatReplyReady,
             &dialog, &TrainingDialog::receiveCoachReply);
+    connect(&dialog, &TrainingDialog::generatedExerciseRequested, &dialog,
+            [this, &dialog](const QString &requestId) {
+        if (!coach_ || !coach_->isConfigured()) {
+            dialog.generatedExerciseFailed(
+                requestId, QString::fromUtf8(u8"请先在 AI 设置中配置 Packy API Key。"));
+            return;
+        }
+        coach_->requestGeneratedExercise(requestId,
+                                         database_.trainingGenerationContext(active_user_id_));
+    });
+    connect(coach_, &DeepSeekCoach::exerciseDraftReady, &dialog,
+            [this, &dialog](const DeepSeekCoach::ExerciseDraft &draft,
+                            const QString &errorMessage) {
+        if (!errorMessage.isEmpty()) {
+            dialog.generatedExerciseFailed(draft.requestId, errorMessage);
+            return;
+        }
+        QString validationError;
+        if (!analyzer_ || !analyzer_->analyzeTrainingPosition(
+                              draft.requestId, draft.board, XiangqiGame::Side::Red,
+                              &validationError)) {
+            dialog.generatedExerciseFailed(draft.requestId, validationError);
+            return;
+        }
+        pending_exercise_drafts_.insert(draft.requestId, draft);
+    });
+    connect(analyzer_, &PikafishAnalyzer::trainingPositionAnalyzed, &dialog,
+            [this, &dialog](const PikafishAnalyzer::PositionAnalysis &analysis,
+                            const QString &validationError) {
+        const auto it = pending_exercise_drafts_.find(analysis.requestId);
+        if (it == pending_exercise_drafts_.end()) return;
+        const DeepSeekCoach::ExerciseDraft draft = it.value();
+        pending_exercise_drafts_.erase(it);
+        if (!validationError.isEmpty()) {
+            dialog.generatedExerciseFailed(analysis.requestId, validationError);
+            return;
+        }
+        const QString pv = PikafishAnalyzer::toChinesePrincipalVariation(
+            analysis.board.toStdString(), analysis.sideToMove,
+            analysis.rawPrincipalVariation);
+        QString storageError;
+        if (database_.storeGeneratedTrainingPosition(
+                active_user_id_, analysis.board, analysis.bestMove, pv, analysis.score,
+                draft.theme, draft.diagnosisTag, draft.learningGoal, draft.hint,
+                &storageError) < 0) {
+            dialog.generatedExerciseFailed(analysis.requestId, storageError);
+            return;
+        }
+        dialog.generatedExerciseReady(analysis.requestId);
+    });
     dialog.exec();
     refreshStats();
 }

@@ -855,7 +855,8 @@ QVector<GameDatabase::TrainingPosition> GameDatabase::dueTrainingPositions(qint6
         "ON t.training_position_id = p.id "
         "WHERE g.user_id = ? AND (p.next_review_at IS NULL OR p.next_review_at <= ?) "
         "GROUP BY p.id ORDER BY "
-        "CASE WHEN p.source_ply >= 1000000 THEN 0 ELSE 1 END, "
+        "CASE WHEN p.source_ply < 0 THEN 0 "
+        "WHEN p.source_ply >= 1000000 THEN 1 ELSE 2 END, "
         "CASE WHEN p.diagnosis_tag IN (SELECT diagnosis_tag FROM training_plan_items "
         "WHERE plan_id=(SELECT id FROM training_plans WHERE user_id=? "
         "ORDER BY through_games DESC, id DESC LIMIT 1)) THEN 0 ELSE 1 END, "
@@ -871,7 +872,7 @@ QVector<GameDatabase::TrainingPosition> GameDatabase::dueTrainingPositions(qint6
         TrainingPosition position;
         position.id = query.value(0).toLongLong();
         position.sourceGameId = query.value(1).toLongLong();
-        position.sourcePly = query.value(2).toInt();
+        position.sourcePly = query.value(2).toLongLong();
         position.board = query.value(3).toString();
         position.bestMove = query.value(4).toString();
         position.actualMove = query.value(5).toString();
@@ -887,6 +888,96 @@ QVector<GameDatabase::TrainingPosition> GameDatabase::dueTrainingPositions(qint6
         positions.push_back(position);
     }
     return positions;
+}
+
+QString GameDatabase::trainingGenerationContext(qint64 userId) const
+{
+    const TrainingStats stats = trainingStats(userId);
+    const TrainingPlan plan = currentTrainingPlan(userId);
+    QStringList dimensions;
+    for (const ProfileDimension &dimension : profileDimensions(userId)) {
+        if (dimension.evidenceCount == 0) continue;
+        dimensions.push_back(QStringLiteral("%1：分数%2，置信度%3，趋势%4；%5")
+                                 .arg(dimension.title)
+                                 .arg(dimension.score)
+                                 .arg(dimension.confidence, 0, 'f', 2)
+                                 .arg(dimension.trend, dimension.hypothesis));
+    }
+
+    QStringList evidence;
+    QSqlQuery query(database_);
+    query.prepare(
+        "SELECT tag,evidence,confidence FROM diagnosis_tags WHERE user_id=? "
+        "ORDER BY confidence DESC,id DESC LIMIT 3");
+    query.addBindValue(userId);
+    if (query.exec()) {
+        while (query.next()) {
+            evidence.push_back(QStringLiteral("%1（%2）：%3")
+                                   .arg(query.value(0).toString())
+                                   .arg(query.value(2).toDouble(), 0, 'f', 2)
+                                   .arg(query.value(1).toString()));
+        }
+    }
+    return QString::fromUtf8(
+        u8"用户画像摘要（仅用于生成一题新的专项训练，不得复述为历史棋局）：\n"
+        u8"有效对局：%1；已分析着法：%2；严重失误：%3；平均损失：%4。\n"
+        u8"当前计划重点：%5。\n能力维度：%6。\n近期证据：%7。")
+        .arg(stats.games)
+        .arg(stats.analyzedMoves)
+        .arg(stats.blunders)
+        .arg(stats.averageLoss, 0, 'f', 1)
+        .arg(plan.focusDimension.isEmpty() ? QString::fromUtf8(u8"证据不足时先练威胁识别")
+                                            : plan.focusDimension + QStringLiteral("；") + plan.hypothesis)
+        .arg(dimensions.isEmpty() ? QString::fromUtf8(u8"暂无足够维度证据")
+                                  : dimensions.join(QStringLiteral("\n")))
+        .arg(evidence.isEmpty() ? QString::fromUtf8(u8"暂无单步证据，题目应为基础威胁检查")
+                                : evidence.join(QStringLiteral("\n")));
+}
+
+qint64 GameDatabase::storeGeneratedTrainingPosition(
+    qint64 userId, const QString &board, const QString &bestMove,
+    const QString &principalVariation, int engineScore, const QString &theme,
+    const QString &diagnosisTag, const QString &learningGoal, const QString &hint,
+    QString *errorMessage)
+{
+    QSqlQuery source(database_);
+    source.prepare("SELECT id FROM games WHERE user_id=? ORDER BY id DESC LIMIT 1");
+    source.addBindValue(userId);
+    if (!source.exec() || !source.next()) {
+        if (errorMessage) {
+            *errorMessage = QString::fromUtf8(u8"生成专项题前至少需要一盘已创建的个人对局。")
+                + (source.lastError().text().isEmpty() ? QString() : QStringLiteral(" ") + source.lastError().text());
+        }
+        return -1;
+    }
+
+    QSqlQuery insert(database_);
+    insert.prepare(
+        "INSERT INTO training_positions(source_game_id,source_ply,board,best_move,actual_move,"
+        "score_loss,category,principal_variation,theme,diagnosis_tag,recommendation_reason,"
+        "mastery,next_review_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+    insert.addBindValue(source.value(0));
+    insert.addBindValue(-QDateTime::currentMSecsSinceEpoch());
+    insert.addBindValue(board);
+    insert.addBindValue(bestMove);
+    insert.addBindValue(QStringLiteral(""));
+    insert.addBindValue(0);
+    insert.addBindValue(QStringLiteral("ai_generated"));
+    insert.addBindValue(principalVariation);
+    insert.addBindValue(QString::fromUtf8(u8"AI 原创专项：") + theme.left(80));
+    insert.addBindValue(diagnosisTag.left(80));
+    insert.addBindValue(QString::fromUtf8(
+        u8"根据你的画像生成的新局面。训练目标：%1。提示方向：%2。Pikafish 已重新验证最佳着与主变（评分 %3）。")
+                            .arg(learningGoal.left(260), hint.left(180))
+                            .arg(engineScore));
+    insert.addBindValue(0);
+    insert.addBindValue(QVariant());
+    insert.addBindValue(QDateTime::currentDateTime().toString(Qt::ISODateWithMs));
+    if (!insert.exec()) {
+        if (errorMessage) *errorMessage = insert.lastError().text();
+        return -1;
+    }
+    return insert.lastInsertId().toLongLong();
 }
 
 bool GameDatabase::recordTrainingAttempt(qint64 positionId,
@@ -927,6 +1018,7 @@ bool GameDatabase::recordTrainingAttempt(qint64 positionId,
         if (errorMessage) *errorMessage = insert.lastError().text();
         return false;
     }
+    insert.finish();
 
     QSqlQuery masteryQuery(database_);
     masteryQuery.prepare("SELECT mastery FROM training_positions WHERE id = ?");
@@ -960,6 +1052,7 @@ bool GameDatabase::recordTrainingAttempt(qint64 positionId,
         if (errorMessage) *errorMessage = update.lastError().text();
         return false;
     }
+    update.finish();
     if (!database_.commit()) {
         if (errorMessage) *errorMessage = database_.lastError().text();
         return false;
@@ -1918,7 +2011,8 @@ bool GameDatabase::rebuildPersonalization(qint64 userId, QString *errorMessage)
         "AND dt.ply=training_positions.source_ply "
         "ORDER BY dt.confidence DESC,dt.id LIMIT 1),'unknown'), "
         "recommendation_reason='来自用户真实对局；系统依据重复错误标签和当前画像安排' "
-        "WHERE source_ply < 1000000 AND source_game_id IN (SELECT id FROM games WHERE user_id=?)");
+        "WHERE source_ply BETWEEN 1 AND 999999 "
+        "AND source_game_id IN (SELECT id FROM games WHERE user_id=?)");
     updatePositions.addBindValue(userId);
     if (!updatePositions.exec()) return fail(updatePositions);
 

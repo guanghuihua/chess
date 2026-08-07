@@ -179,6 +179,19 @@ void DeepSeekCoach::requestChat(const QString &requestId,
     processNext();
 }
 
+void DeepSeekCoach::requestGeneratedExercise(const QString &requestId,
+                                             const QString &profileContext)
+{
+    if (api_key_.isEmpty() || requestId.isEmpty() || profileContext.trimmed().isEmpty()) {
+        ExerciseDraft draft;
+        draft.requestId = requestId;
+        emit exerciseDraftReady(draft, QString::fromUtf8(u8"Packy 尚未配置，或用户画像证据不足。"));
+        return;
+    }
+    exercise_requests_.enqueue(ExerciseRequest{requestId, profileContext.left(10000)});
+    processNext();
+}
+
 void DeepSeekCoach::processNext()
 {
     if (busy_ || api_key_.isEmpty()) {
@@ -209,7 +222,7 @@ void DeepSeekCoach::processNextChat()
 {
     if (busy_ || api_key_.isEmpty()) return;
     if (chat_requests_.isEmpty()) {
-        processNextGameReview();
+        processNextExercise();
         return;
     }
 
@@ -224,6 +237,28 @@ void DeepSeekCoach::processNextChat()
         networkRequest, providerRequestBody(makeChatRequestBody(requestData), false));
     connect(reply, &QNetworkReply::finished, this, [this, reply, requestData] {
         handleChatReply(reply, requestData);
+    });
+}
+
+void DeepSeekCoach::processNextExercise()
+{
+    if (busy_ || api_key_.isEmpty()) return;
+    if (exercise_requests_.isEmpty()) {
+        processNextGameReview();
+        return;
+    }
+
+    busy_ = true;
+    const ExerciseRequest requestData = exercise_requests_.dequeue();
+    QNetworkRequest networkRequest(activeEndpoint());
+    networkRequest.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    networkRequest.setRawHeader("Authorization", "Bearer " + api_key_.toUtf8());
+    networkRequest.setTransferTimeout(90000);
+    emit statusChanged(QString::fromUtf8(u8"AI 正在根据用户画像设计新的专项题……"), true);
+    QNetworkReply *reply = network_.post(
+        networkRequest, providerRequestBody(makeExerciseRequestBody(requestData), false));
+    connect(reply, &QNetworkReply::finished, this, [this, reply, requestData] {
+        handleExerciseReply(reply, requestData);
     });
 }
 
@@ -396,6 +431,54 @@ void DeepSeekCoach::handleChatReply(QNetworkReply *reply,
     processNext();
 }
 
+void DeepSeekCoach::handleExerciseReply(QNetworkReply *reply,
+                                        const ExerciseRequest &request)
+{
+    const QByteArray body = normalizedResponseBody(reply->readAll());
+    const auto networkError = reply->error();
+    const QString networkErrorText = reply->errorString();
+    reply->deleteLater();
+    busy_ = false;
+
+    ExerciseDraft draft;
+    draft.requestId = request.requestId;
+    QString error;
+    QJsonParseError outerError;
+    const QJsonDocument outerDocument = QJsonDocument::fromJson(body, &outerError);
+    if (networkError != QNetworkReply::NoError) {
+        error = networkErrorText;
+    } else if (outerError.error != QJsonParseError::NoError || !outerDocument.isObject()) {
+        error = outerError.errorString();
+    } else if (outerDocument.object().contains("error")) {
+        error = outerDocument.object().value("error").toObject().value("message").toString();
+    } else {
+        const QJsonArray choices = outerDocument.object().value("choices").toArray();
+        const QString content = choices.isEmpty() ? QString()
+            : choices.at(0).toObject().value("message").toObject().value("content").toString();
+        QJsonObject proposal;
+        if (content.trimmed().isEmpty()
+            || !JsonObjectExtractor::parse(content, &proposal, &error)) {
+            if (error.isEmpty()) error = QString::fromUtf8(u8"AI 返回了空题目草案。");
+        } else {
+            draft.board = proposal.value("board").toString().trimmed();
+            draft.theme = proposal.value("theme").toString().trimmed();
+            draft.diagnosisTag = proposal.value("diagnosis_tag").toString().trimmed();
+            draft.learningGoal = proposal.value("learning_goal").toString().trimmed();
+            draft.hint = proposal.value("hint").toString().trimmed();
+            if (draft.board.isEmpty() || draft.theme.isEmpty() || draft.diagnosisTag.isEmpty()
+                || draft.learningGoal.isEmpty() || draft.hint.isEmpty()) {
+                error = QString::fromUtf8(u8"AI 题目草案字段不完整，已拒绝入题库。");
+            }
+        }
+    }
+    emit exerciseDraftReady(draft, error);
+    emit statusChanged(error.isEmpty()
+                           ? QString::fromUtf8(u8"AI 题目草案已生成，正在交给 Pikafish 验题")
+                           : QString::fromUtf8(u8"AI 出题失败：") + error,
+                       error.isEmpty());
+    processNext();
+}
+
 QByteArray DeepSeekCoach::makeChatRequestBody(const ChatRequest &request)
 {
     const QString systemPrompt = QString::fromUtf8(
@@ -418,6 +501,30 @@ QByteArray DeepSeekCoach::makeChatRequestBody(const ChatRequest &request)
     body["messages"] = QJsonArray{
         QJsonObject{{"role", "system"}, {"content", systemPrompt}},
         QJsonObject{{"role", "user"}, {"content", userPrompt}}
+    };
+    return QJsonDocument(body).toJson(QJsonDocument::Compact);
+}
+
+QByteArray DeepSeekCoach::makeExerciseRequestBody(const ExerciseRequest &request)
+{
+    const QString systemPrompt = QString::fromUtf8(
+        u8"你是中国象棋个性化训练出题人。根据用户画像设计一题新的红方走棋题；题面不得复制任何历史错局。"
+        u8"只输出一个 JSON 对象，字段必须为 board、theme、diagnosis_tag、learning_goal、hint。"
+        u8"board 是 10 行、每行 9 格、以 / 分隔的局面编码：红方用大写 K A E H R C S，黑方用小写 k a e h r c s，空格用 .；"
+        u8"红方走。双方将帅必须存在。不要输出答案、坐标着法、棋谱或 Markdown。"
+        u8"题目必须围绕画像中的一个弱项，要求有可计算的将军、吃子、威胁、兑子或残局技术目标；"
+        u8"theme、learning_goal、hint 均使用简洁中文，hint 只能给思考方向而不能泄露着法。"
+        u8"局面将由规则程序和 Pikafish 独立验证；不确定合法性时宁可选择简单、素材少、局面清晰的局面。");
+    QJsonObject body;
+    body["model"] = QString::fromLatin1(packyFastModel);
+    body["stream"] = false;
+    body["max_tokens"] = 650;
+    body["temperature"] = 0.65;
+    body["thinking"] = QJsonObject{{"type", "disabled"}};
+    body["response_format"] = QJsonObject{{"type", "json_object"}};
+    body["messages"] = QJsonArray{
+        QJsonObject{{"role", "system"}, {"content", systemPrompt}},
+        QJsonObject{{"role", "user"}, {"content", request.profileContext}}
     };
     return QJsonDocument(body).toJson(QJsonDocument::Compact);
 }

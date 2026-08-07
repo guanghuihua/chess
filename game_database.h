@@ -59,7 +59,7 @@ public:
     {
         qint64 id = -1;
         qint64 sourceGameId = -1;
-        int sourcePly = 0;
+        qint64 sourcePly = 0;
         QString board;
         QString bestMove;
         QString actualMove;
@@ -299,6 +299,15 @@ public:
     bool hasGameReview(qint64 gameId) const;
     GameReview gameReview(qint64 gameId) const;
     int generateTrainingPositions(qint64 userId, QString *errorMessage = nullptr);
+    QString trainingGenerationContext(qint64 userId) const;
+    qint64 storeGeneratedTrainingPosition(qint64 userId, const QString &board,
+                                          const QString &bestMove,
+                                          const QString &principalVariation,
+                                          int engineScore, const QString &theme,
+                                          const QString &diagnosisTag,
+                                          const QString &learningGoal,
+                                          const QString &hint,
+                                          QString *errorMessage = nullptr);
     QVector<TrainingPosition> dueTrainingPositions(qint64 userId, int limit = 10) const;
     bool recordTrainingAttempt(qint64 positionId, const QString &attemptedMove,
                                bool correct, qint64 thinkingTimeMs,

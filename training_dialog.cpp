@@ -71,6 +71,7 @@ TrainingDialog::TrainingDialog(GameDatabase *database, qint64 userId, QWidget *p
     panelLayout->addWidget(result_browser_, 1);
 
     auto *buttonRow = new QHBoxLayout;
+    generate_button_ = new QPushButton(QString::fromUtf8(u8"AI 出新题"), panel);
     hint_button_ = new QPushButton(QString::fromUtf8(u8"提示"), panel);
     next_button_ = new QPushButton(QString::fromUtf8(u8"下一题"), panel);
     ai_button_ = new QPushButton(QString::fromUtf8(u8"AI残局讲解"), panel);
@@ -78,6 +79,7 @@ TrainingDialog::TrainingDialog(GameDatabase *database, qint64 userId, QWidget *p
     next_button_->setObjectName("trainingPrimary");
     auto *closeButton = new QPushButton(QString::fromUtf8(u8"结束训练"), panel);
     buttonRow->addWidget(hint_button_);
+    buttonRow->addWidget(generate_button_);
     buttonRow->addWidget(ai_button_);
     buttonRow->addWidget(next_button_);
     buttonRow->addStretch();
@@ -112,6 +114,8 @@ TrainingDialog::TrainingDialog(GameDatabase *database, qint64 userId, QWidget *p
             this, &TrainingDialog::handleMove);
     connect(hint_button_, &QPushButton::clicked,
             this, &TrainingDialog::showHint);
+    connect(generate_button_, &QPushButton::clicked,
+            this, &TrainingDialog::requestGeneratedExercise);
     connect(next_button_, &QPushButton::clicked,
             this, &TrainingDialog::nextPosition);
     connect(ai_button_, &QPushButton::clicked,
@@ -157,8 +161,11 @@ void TrainingDialog::loadCurrentPosition()
                                  .arg(positions_.size())
                                  .arg(position.mastery));
     QString sourceKind = QString::fromUtf8(u8"画像专项");
+    const bool isAiGenerated = position.sourcePly < 0;
     const bool isProfileVariation = position.theme.contains(QString::fromUtf8(u8"画像变式"));
-    if (isProfileVariation) {
+    if (isAiGenerated) {
+        sourceKind = QString::fromUtf8(u8"AI 原创题");
+    } else if (isProfileVariation) {
         sourceKind = QString::fromUtf8(u8"画像原创变式");
     } else if (position.diagnosisTag == "undo_behavior") {
         sourceKind = QString::fromUtf8(u8"悔棋证据");
@@ -168,20 +175,27 @@ void TrainingDialog::loadCurrentPosition()
     }
     theme_label_->setText(QString::fromUtf8(u8"训练主题：") + position.theme
                           + QString::fromUtf8(u8" · ") + sourceKind);
-    const int originPly = isProfileVariation ? position.sourcePly % 1000000
-                                              : position.sourcePly;
-    source_label_->setText(QString::fromUtf8(
-        u8"关联你的第 %1 盘、第 %2 步 · 当时局面损失 %3 · 已练习 %4 次")
-        .arg(position.sourceGameId)
-        .arg(originPly)
-        .arg(position.scoreLoss)
-        .arg(position.attempts)
-        + QString::fromUtf8(u8"\n推荐原因：") + position.recommendationReason);
+    const qint64 originPly = isProfileVariation ? position.sourcePly % 1000000
+                                                 : position.sourcePly;
+    if (isAiGenerated) {
+        source_label_->setText(QString::fromUtf8(u8"这是一道根据你的错题模式与能力画像新生成的题目 · 已练习 %1 次\n出题依据：%2")
+                                   .arg(position.attempts)
+                                   .arg(position.recommendationReason));
+    } else {
+        source_label_->setText(QString::fromUtf8(
+            u8"关联你的第 %1 盘、第 %2 步 · 当时局面损失 %3 · 已练习 %4 次")
+            .arg(position.sourceGameId)
+            .arg(originPly)
+            .arg(position.scoreLoss)
+            .arg(position.attempts)
+            + QString::fromUtf8(u8"\n推荐原因：") + position.recommendationReason);
+    }
     result_browser_->clear();
     hint_button_->setEnabled(true);
     ai_button_->setEnabled(position.theme.contains(QString::fromUtf8(u8"残局"))
                            || position.diagnosisTag == "missed_mate");
     next_button_->setEnabled(false);
+    generate_button_->setEnabled(generation_request_id_.isEmpty());
     hint_count_ = 0;
     if (!board_->loadTrainingPosition(position.board.toStdString())) {
         result_browser_->setText(QString::fromUtf8(u8"无法加载这道训练题的局面。"));
@@ -231,6 +245,30 @@ void TrainingDialog::handleMove(const QString &uciMove)
     hint_button_->setEnabled(false);
     ai_button_->setEnabled(false);
     next_button_->setEnabled(true);
+    requestAutomaticCoaching(uciMove, correct);
+}
+
+void TrainingDialog::requestAutomaticCoaching(const QString &uciMove, bool correct)
+{
+    if (!coach_request_id_.isEmpty() || current_index_ < 0 || current_index_ >= positions_.size()) {
+        return;
+    }
+    const auto &position = positions_.at(current_index_);
+    coach_request_id_ = QStringLiteral("training-feedback-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString evidence = QString::fromUtf8(
+        u8"这是已经由 XiangqiGame 和 Pikafish 验证的专项训练。\n"
+        u8"训练主题：%1\n用户画像标签：%2\n局面编码：%3\n"
+        u8"用户作答：%4\n引擎最佳着：%5\n引擎主变：%6\n作答判定：%7")
+        .arg(position.theme, position.diagnosisTag, position.board,
+             displayMove(position.board, uciMove), displayMove(position.board, position.bestMove),
+             displayVariation(position.board, position.principalVariation),
+             correct ? QString::fromUtf8(u8"正确") : QString::fromUtf8(u8"错误"));
+    result_browser_->append(QString::fromUtf8(
+        u8"<p style='color:#315f54'><b>AI 教练正在根据你的落子解释原因……</b></p>"));
+    emit coachQuestionAsked(coach_request_id_, evidence, QString(),
+                            QString::fromUtf8(u8"请解释这次作答：错误时必须说明具体漏算、对手惩罚和正确着的作用；"
+                                              u8"答对时说明关键判断为何成立，以及下次如何快速识别。"));
 }
 
 void TrainingDialog::showHint()
@@ -315,19 +353,55 @@ void TrainingDialog::requestEndgameCoaching()
         QString::fromUtf8(u8"请把这个残局题讲成可执行的杀法训练：先说明双方将军、吃子和直接威胁，再给出我应计算的关键分支和成功标准。"));
 }
 
+void TrainingDialog::requestGeneratedExercise()
+{
+    if (!generation_request_id_.isEmpty()) return;
+    generation_request_id_ = QStringLiteral("generated-training-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    generate_button_->setEnabled(false);
+    result_browser_->setHtml(QString::fromUtf8(
+        u8"<p>AI 正在根据你的错题模式和能力画像设计新题，随后会由 Pikafish 验题……</p>"));
+    emit generatedExerciseRequested(generation_request_id_);
+}
+
+void TrainingDialog::generatedExerciseReady(const QString &requestId)
+{
+    if (requestId != generation_request_id_) return;
+    generation_request_id_.clear();
+    generate_button_->setEnabled(true);
+    loadSession();
+    result_browser_->setHtml(QString::fromUtf8(
+        u8"<p style='color:#26733c'>AI 原创题已通过规则和 Pikafish 验证，已加入本次训练。</p>"));
+}
+
+void TrainingDialog::generatedExerciseFailed(const QString &requestId,
+                                             const QString &errorMessage)
+{
+    if (requestId != generation_request_id_) return;
+    generation_request_id_.clear();
+    generate_button_->setEnabled(true);
+    result_browser_->setHtml(QString::fromUtf8(
+        u8"<p style='color:#9b342b'>本次 AI 候选题没有通过验证：%1</p>"
+        u8"<p>没有将它保存到题库。可以再次生成另一题。</p>")
+                                 .arg(errorMessage.toHtmlEscaped()));
+}
+
 void TrainingDialog::receiveCoachReply(const QString &requestId,
                                         const QString &answer,
                                         const QString &errorMessage)
 {
     if (requestId != coach_request_id_) return;
+    const bool isAutomaticFeedback = requestId.startsWith(QStringLiteral("training-feedback-"));
     coach_request_id_.clear();
     if (!errorMessage.isEmpty()) {
-        result_browser_->setHtml(QString::fromUtf8(
-            u8"<p style='color:#9b342b'>AI残局讲解失败：%1</p>")
+        result_browser_->append(QString::fromUtf8(
+            u8"<p style='color:#9b342b'>AI 教练讲解失败：%1</p>")
                                      .arg(errorMessage.toHtmlEscaped()));
     } else {
-        result_browser_->setHtml(QString::fromUtf8(
-            u8"<h3>GPT-5.6 Terra 残局杀法训练</h3><p>%1</p>")
+        result_browser_->append(QString::fromUtf8(
+            isAutomaticFeedback
+                ? u8"<h3>AI 教练作答复盘</h3><p>%1</p>"
+                : u8"<h3>GPT-5.6 Terra 残局杀法训练</h3><p>%1</p>")
                                      .arg(answer.toHtmlEscaped().replace("\n", "<br>")));
     }
     if (current_index_ >= 0 && current_index_ < positions_.size()) {

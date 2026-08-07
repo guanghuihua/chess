@@ -33,10 +33,23 @@ public:
         qint64 thinkingTimeMs = 0;
     };
 
+    struct PositionAnalysis
+    {
+        QString requestId;
+        QString board;
+        QString bestMove;
+        QString rawPrincipalVariation;
+        int score = 0;
+        XiangqiGame::Side sideToMove = XiangqiGame::Side::Red;
+    };
+
     explicit PikafishAnalyzer(QObject *parent = nullptr);
     ~PikafishAnalyzer() override;
 
     void analyzeMove(qint64 gameId, const XiangqiGame::MoveRecord &move);
+    bool analyzeTrainingPosition(const QString &requestId, const QString &board,
+                                 XiangqiGame::Side sideToMove,
+                                 QString *errorMessage = nullptr);
     bool isAvailable() const;
     bool hasPendingAnalysis() const;
     QString enginePath() const;
@@ -49,6 +62,8 @@ public:
 
 signals:
     void analysisReady(const PikafishAnalyzer::AnalysisResult &result);
+    void trainingPositionAnalyzed(const PikafishAnalyzer::PositionAnalysis &result,
+                                  const QString &errorMessage);
     void analysisQueueDrained();
     void statusChanged(const QString &message, bool available);
 
@@ -60,7 +75,8 @@ private:
         WaitingForReady,
         Idle,
         AnalyzingBefore,
-        AnalyzingAfter
+        AnalyzingAfter,
+        AnalyzingPosition
     };
 
     struct Request
@@ -69,12 +85,21 @@ private:
         XiangqiGame::MoveRecord move;
     };
 
+    struct PositionRequest
+    {
+        QString requestId;
+        QString board;
+        XiangqiGame::Side sideToMove = XiangqiGame::Side::Red;
+    };
+
     QProcess process_;
     QQueue<Request> requests_;
+    QQueue<PositionRequest> position_requests_;
     QString output_buffer_;
     QString engine_path_;
     State state_ = State::Stopped;
     Request current_;
+    PositionRequest current_position_;
     int latest_score_ = 0;
     QString latest_pv_;
     int best_score_ = 0;
@@ -85,6 +110,9 @@ private:
     void handleOutput();
     void handleLine(const QString &line);
     void processNextRequest();
+    void beginPositionAnalysis();
+    void finishPositionAnalysis(const QString &bestMove);
+    void rejectPositionRequests(const QString &errorMessage);
     void beginBeforeAnalysis();
     void beginAfterAnalysis();
     void finishCurrentAnalysis();
@@ -101,5 +129,6 @@ private:
 };
 
 Q_DECLARE_METATYPE(PikafishAnalyzer::AnalysisResult)
+Q_DECLARE_METATYPE(PikafishAnalyzer::PositionAnalysis)
 
 #endif // PIKAFISH_ANALYZER_H

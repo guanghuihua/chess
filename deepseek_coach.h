@@ -41,6 +41,16 @@ public:
         QString reflectionQuestion;
     };
 
+    struct ExerciseDraft
+    {
+        QString requestId;
+        QString board;
+        QString theme;
+        QString diagnosisTag;
+        QString learningGoal;
+        QString hint;
+    };
+
     explicit DeepSeekCoach(QObject *parent = nullptr);
 
     bool isConfigured() const;
@@ -55,12 +65,16 @@ public:
     void requestChat(const QString &requestId, const QString &evidenceContext,
                      const QString &conversationHistory,
                      const QString &question);
+    void requestGeneratedExercise(const QString &requestId,
+                                  const QString &profileContext);
 
 signals:
     void coachingReady(const DeepSeekCoach::CoachingResult &result);
     void gameReviewReady(const DeepSeekCoach::GameReviewResult &result);
     void chatReplyReady(const QString &requestId, const QString &answer,
                         const QString &errorMessage);
+    void exerciseDraftReady(const DeepSeekCoach::ExerciseDraft &draft,
+                            const QString &errorMessage);
     void statusChanged(const QString &message, bool available);
     void connectionTested(bool success, const QString &message);
 
@@ -87,10 +101,17 @@ private:
         QString question;
     };
 
+    struct ExerciseRequest
+    {
+        QString requestId;
+        QString profileContext;
+    };
+
     QNetworkAccessManager network_;
     QQueue<Request> requests_;
     QQueue<GameReviewRequest> game_review_requests_;
     QQueue<ChatRequest> chat_requests_;
+    QQueue<ExerciseRequest> exercise_requests_;
     QString api_key_;
     bool packy_mode_ = false;
     bool busy_ = false;
@@ -98,13 +119,16 @@ private:
     void processNext();
     void processNextGameReview();
     void processNextChat();
+    void processNextExercise();
     void handleReply(class QNetworkReply *reply, const Request &request);
     void handleGameReviewReply(class QNetworkReply *reply,
                                const GameReviewRequest &request);
     void retryOrFallbackGameReview(const GameReviewRequest &request,
                                    const QString &reason);
     void handleChatReply(class QNetworkReply *reply, const ChatRequest &request);
+    void handleExerciseReply(class QNetworkReply *reply, const ExerciseRequest &request);
     static QByteArray makeChatRequestBody(const ChatRequest &request);
+    static QByteArray makeExerciseRequestBody(const ExerciseRequest &request);
     static QByteArray makeRequestBody(const Request &request);
     static QByteArray makeGameReviewRequestBody(const GameReviewRequest &request);
     QByteArray providerRequestBody(const QByteArray &chatCompletionsBody,
@@ -125,5 +149,6 @@ private:
 
 Q_DECLARE_METATYPE(DeepSeekCoach::CoachingResult)
 Q_DECLARE_METATYPE(DeepSeekCoach::GameReviewResult)
+Q_DECLARE_METATYPE(DeepSeekCoach::ExerciseDraft)
 
 #endif // DEEPSEEK_COACH_H

@@ -88,19 +88,41 @@ int main(int argc, char *argv[])
             application.exit(9);
             return;
         }
+        const qint64 generatedId = database.storeGeneratedTrainingPosition(
+            1, QString::fromStdString(move.boardBefore), trainingBest,
+            result.principalVariation, 42, QString::fromUtf8(u8"威胁识别"),
+            QStringLiteral("missed_threat"), QString::fromUtf8(u8"训练先检查对方直接威胁"),
+            QString::fromUtf8(u8"先列出对方将军、吃子和强制威胁"), &error);
+        if (generatedId < 0) {
+            qCritical() << "AI generated training position setup failed:" << error;
+            application.exit(10);
+            return;
+        }
         const auto positions = database.dueTrainingPositions(1, 1000);
         auto profileVariation = positions.cend();
+        auto aiGenerated = positions.cend();
         for (auto it = positions.cbegin(); it != positions.cend(); ++it) {
             if (it->theme.contains(QString::fromUtf8(u8"画像变式"))) {
                 profileVariation = it;
-                break;
+            }
+            if (it->id == generatedId && it->sourcePly < 0) {
+                aiGenerated = it;
             }
         }
-        if (positions.isEmpty() || profileVariation == positions.cend() ||
-            !database.recordTrainingAttempt(profileVariation->id,
+        if (positions.isEmpty() || profileVariation == positions.cend()
+            || aiGenerated == positions.cend()) {
+            qCritical() << "Expected generated training positions were missing"
+                        << positions.size()
+                        << (profileVariation != positions.cend())
+                        << (aiGenerated != positions.cend());
+            application.exit(10);
+            return;
+        }
+        if (!database.recordTrainingAttempt(profileVariation->id,
                                             profileVariation->bestMove,
                                             true, 2500, &error)) {
-            qCritical() << "Training attempt failed:" << error;
+            qCritical() << "Training attempt failed:" << profileVariation->id
+                        << profileVariation->sourcePly << error;
             application.exit(10);
             return;
         }

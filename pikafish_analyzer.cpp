@@ -24,15 +24,19 @@ PikafishAnalyzer::PikafishAnalyzer(QObject *parent)
         }
     });
     connect(&process_, &QProcess::errorOccurred, this, [this](QProcess::ProcessError) {
+        rejectPositionRequests(QString::fromUtf8(u8"Pikafish 启动失败：") + process_.errorString());
         state_ = State::Stopped;
         requests_.clear();
+        position_requests_.clear();
         emit statusChanged(QString::fromUtf8(u8"皮卡鱼启动失败：") + process_.errorString(), false);
         emit analysisQueueDrained();
     });
     connect(&process_, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
             this, [this](int, QProcess::ExitStatus) {
+                rejectPositionRequests(QString::fromUtf8(u8"Pikafish 已停止，无法验证 AI 候选题。"));
                 state_ = State::Stopped;
                 requests_.clear();
+                position_requests_.clear();
                 emit statusChanged(QString::fromUtf8(u8"皮卡鱼已停止"), false);
                 emit analysisQueueDrained();
             });
@@ -65,6 +69,33 @@ void PikafishAnalyzer::analyzeMove(qint64 gameId, const XiangqiGame::MoveRecord 
     }
 }
 
+bool PikafishAnalyzer::analyzeTrainingPosition(const QString &requestId, const QString &board,
+                                               XiangqiGame::Side sideToMove,
+                                               QString *errorMessage)
+{
+    XiangqiGame position;
+    if (requestId.isEmpty() || !position.loadPosition(board.toStdString(), sideToMove)) {
+        if (errorMessage) {
+            *errorMessage = QString::fromUtf8(u8"AI 候选题的局面编码不合法，已拒绝入题库。");
+        }
+        return false;
+    }
+    if (engine_path_.isEmpty()) {
+        rejectPositionRequests(QString::fromUtf8(u8"未找到 Pikafish，无法验证 AI 候选题。"));
+        if (errorMessage) {
+            *errorMessage = QString::fromUtf8(u8"未找到 Pikafish，无法验证 AI 候选题。");
+        }
+        return false;
+    }
+    position_requests_.enqueue(PositionRequest{requestId, board, sideToMove});
+    if (state_ == State::Stopped) {
+        startEngine();
+    } else if (state_ == State::Idle) {
+        processNextRequest();
+    }
+    return true;
+}
+
 bool PikafishAnalyzer::isAvailable() const
 {
     return !engine_path_.isEmpty() && process_.state() == QProcess::Running;
@@ -76,6 +107,7 @@ bool PikafishAnalyzer::hasPendingAnalysis() const
         return false;
     }
     return !requests_.isEmpty()
+           || !position_requests_.isEmpty()
            || state_ == State::WaitingForUci
            || state_ == State::WaitingForReady
            || state_ == State::AnalyzingBefore
@@ -104,13 +136,30 @@ void PikafishAnalyzer::startEngine()
     state_ = State::WaitingForUci;
     process_.start();
     if (!process_.waitForStarted(3000)) {
+        rejectPositionRequests(QString::fromUtf8(u8"无法启动 Pikafish：") + process_.errorString());
         state_ = State::Stopped;
         requests_.clear();
+        position_requests_.clear();
         emit statusChanged(QString::fromUtf8(u8"无法启动皮卡鱼：") + process_.errorString(), false);
         emit analysisQueueDrained();
         return;
     }
     sendCommand("uci");
+}
+
+void PikafishAnalyzer::rejectPositionRequests(const QString &errorMessage)
+{
+    if (state_ == State::AnalyzingPosition && !current_position_.requestId.isEmpty()) {
+        PositionAnalysis failed;
+        failed.requestId = current_position_.requestId;
+        emit trainingPositionAnalyzed(failed, errorMessage);
+    }
+    while (!position_requests_.isEmpty()) {
+        PositionAnalysis failed;
+        failed.requestId = position_requests_.dequeue().requestId;
+        emit trainingPositionAnalyzed(failed, errorMessage);
+    }
+    current_position_ = PositionRequest{};
 }
 
 void PikafishAnalyzer::handleOutput()
@@ -170,16 +219,87 @@ void PikafishAnalyzer::handleLine(const QString &line)
         beginAfterAnalysis();
     } else if (state_ == State::AnalyzingAfter) {
         finishCurrentAnalysis();
+    } else if (state_ == State::AnalyzingPosition) {
+        finishPositionAnalysis(parts.size() >= 2 ? parts.at(1) : QString());
     }
 }
 
 void PikafishAnalyzer::processNextRequest()
 {
-    if (state_ != State::Idle || requests_.isEmpty()) {
+    if (state_ != State::Idle) {
         return;
     }
-    current_ = requests_.dequeue();
-    beginBeforeAnalysis();
+    if (!requests_.isEmpty()) {
+        current_ = requests_.dequeue();
+        beginBeforeAnalysis();
+        return;
+    }
+    if (!position_requests_.isEmpty()) {
+        current_position_ = position_requests_.dequeue();
+        beginPositionAnalysis();
+    }
+}
+
+void PikafishAnalyzer::beginPositionAnalysis()
+{
+    latest_score_ = 0;
+    latest_pv_.clear();
+    const QString fen = toFen(current_position_.board.toStdString(),
+                              current_position_.sideToMove, 1);
+    sendCommand("position fen " + fen);
+    sendCommand("go movetime 900");
+    state_ = State::AnalyzingPosition;
+    emit statusChanged(QString::fromUtf8(u8"Pikafish 正在验证 AI 生成训练题……"), true);
+}
+
+void PikafishAnalyzer::finishPositionAnalysis(const QString &bestMove)
+{
+    PositionAnalysis result;
+    result.requestId = current_position_.requestId;
+    result.board = current_position_.board;
+    result.bestMove = bestMove;
+    result.rawPrincipalVariation = latest_pv_;
+    result.score = latest_score_;
+    result.sideToMove = current_position_.sideToMove;
+
+    QString error;
+    QStringList pv = result.rawPrincipalVariation.split(' ', Qt::SkipEmptyParts);
+    if (pv.isEmpty()) {
+        pv.push_back(result.bestMove);
+    } else if (pv.front() != result.bestMove) {
+        pv.push_front(result.bestMove);
+    }
+    result.rawPrincipalVariation = pv.join(' ');
+    XiangqiGame verifier;
+    const auto decodeAndApply = [&verifier](const QString &move) {
+        if (move.size() != 4) return false;
+        const int fromCol = move.at(0).unicode() - QChar('a').unicode();
+        const int fromRow = QChar('9').unicode() - move.at(1).unicode();
+        const int toCol = move.at(2).unicode() - QChar('a').unicode();
+        const int toRow = QChar('9').unicode() - move.at(3).unicode();
+        return XiangqiGame::inBounds(fromRow, fromCol)
+               && XiangqiGame::inBounds(toRow, toCol)
+               && verifier.isLegalMove(fromRow, fromCol, toRow, toCol)
+               && verifier.move(fromRow, fromCol, toRow, toCol);
+    };
+    if (!verifier.loadPosition(result.board.toStdString(), result.sideToMove)
+        || !decodeAndApply(result.bestMove)) {
+        error = QString::fromUtf8(u8"Pikafish 未返回可验证的最佳着，AI 候选题已丢弃。");
+    } else {
+        for (int index = 1; index < pv.size(); ++index) {
+            if (!decodeAndApply(pv.at(index))) {
+                error = QString::fromUtf8(u8"Pikafish 主变无法通过规则校验，AI 候选题已丢弃。");
+                break;
+            }
+        }
+    }
+    emit trainingPositionAnalyzed(result, error);
+    state_ = State::Idle;
+    processNextRequest();
+    if (state_ == State::Idle) {
+        emit statusChanged(QString::fromUtf8(u8"Pikafish 已就绪"), true);
+        emit analysisQueueDrained();
+    }
 }
 
 void PikafishAnalyzer::beginBeforeAnalysis()

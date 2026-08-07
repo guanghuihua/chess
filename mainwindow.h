@@ -67,6 +67,7 @@ private:
     qint64 pending_chat_game_id_ = -1;
     int pending_chat_ply_ = 0;
     QHash<int, PikafishAnalyzer::AnalysisResult> current_analyses_;
+    QHash<QString, DeepSeekCoach::ExerciseDraft> pending_exercise_drafts_;
 
     void initializeTrainingSystem();
     void handleMoveCompleted();
