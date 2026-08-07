@@ -189,3 +189,23 @@ add_executable(json_response_test
 target_link_libraries(json_response_test PRIVATE Qt${QT_VERSION_MAJOR}::Core)
 target_include_directories(json_response_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME json_response_test COMMAND json_response_test)
+
+add_executable(coach_request_payload_test
+    tests/coach_request_payload_test.cpp
+    deepseek_coach.cpp
+    deepseek_coach.h
+    credential_store.cpp
+    credential_store.h
+    json_object_extractor.cpp
+    json_object_extractor.h
+)
+target_link_libraries(coach_request_payload_test PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Network
+    Qt${QT_VERSION_MAJOR}::Sql
+)
+if(WIN32)
+    target_link_libraries(coach_request_payload_test PRIVATE advapi32)
+endif()
+target_include_directories(coach_request_payload_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME coach_request_payload_test COMMAND coach_request_payload_test)

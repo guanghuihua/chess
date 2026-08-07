@@ -451,7 +451,9 @@ QByteArray DeepSeekCoach::makeChatRequestBody(const ChatRequest &request)
         u8"Pikafish 引擎证据优先于语言推测；不要修改评分、最佳着或推荐变化，也不要编造未提供的计算。"
         u8"总长度不超过 220 个汉字，只写四项：1. 错在哪；2. 对手如何惩罚；3. 推荐着解决什么；4. 下次检查什么。"
         u8"每项最多两句。禁止寒暄、鼓励、复述用户问题、重复整段评分、空泛地说‘加强计算’或‘注意局面’。"
-        u8"必须把建议落到具体棋子、线路、先后手或将军/吃子/威胁；证据不足就用一句话指出缺少什么。"
+        u8"只能解释输入中已经给出的中文棋谱、验证变化和评分差异。不得根据记忆、坐标棋谱或棋盘编码推测棋子位置、"
+        u8"行棋路线、攻击、保护、将军、吃子或交换关系，也不得自行计算新变化。"
+        u8"若给出的变化不足以证明具体战术原因，明确写‘现有引擎变化只确认评分恶化，请在棋盘回放中核对具体子力关系’。"
         u8"禁止输出 a0-i9、f5-c3 等坐标着法；所有走法必须使用中文棋谱，例如车九进一。");
     const QString userPrompt = QString::fromUtf8(
         u8"【当前棋局证据】\n%1\n\n【此前对话】\n%2\n\n【学习者的新问题】\n%3")
@@ -589,28 +591,29 @@ QByteArray DeepSeekCoach::makeRequestBody(const Request &request)
         u8"你是一名直接、严谨的中国象棋教练。Pikafish 引擎负责棋局计算，你只负责根据给定证据解释决策错误。"
         u8"不得否定或修改引擎给出的最佳走法和评分，不得编造未提供的变化。"
         u8"禁止寒暄、鼓励、抽象评价性格，以及‘加强计算’‘注意局面’等空话。"
-        u8"必须先比较实战后惩罚线与推荐着应对线，再解释棋子、线路、先手、交换或弱点之间的具体因果。"
-        u8"每个字段至少引用一个给定的中文棋谱或明确棋子/线路；若引擎变化不足以证明强制战术，"
-        u8"必须明确写‘引擎未证明强制战术’，并说明可确认的局面差异，不得虚构惩罚。"
+        u8"先比较实战后惩罚线与推荐着应对线，但只能解释输入中已经给出的中文棋谱、验证变化和评分差异。"
+        u8"本请求不提供可靠的棋盘空间信息：不得根据记忆、坐标棋谱或棋盘编码推测棋子位置、行棋路线、攻击、保护、"
+        u8"将军、吃子、交换或弱点，也不得自行计算新变化。"
+        u8"若两条引擎变化不足以证明具体战术原因，必须明确写‘现有引擎变化只确认评分恶化，请在棋盘回放中核对具体子力关系’，"
+        u8"不得虚构惩罚。"
         u8"学习者当时思路是对其计算过程的线索：只在证据支持时说明哪里漏算或误判，不得做人格判断。"
         u8"必须输出且只输出一个 JSON 对象，包含四个字符串字段："
-        u8"diagnosis：60字以内，直接说明实战着漏掉了什么具体对象或线路；"
-        u8"evidence：140字以内，先写实战后对手如何应对，再写推荐线如何避免同一问题；"
-        u8"training_task：100字以内，说明推荐着的真实目的，并给出本局应比较的两个候选着；"
+        u8"diagnosis：80字以内，只说明两条已验证变化和评分所能确认的差异；"
+        u8"evidence：140字以内，引用实战后与推荐后的已验证中文棋谱；"
+        u8"training_task：100字以内，要求学习者在棋盘回放中对比这两条变化，不得补充未验证的棋局事实；"
         u8"reflection_question：60字以内，写成一个可执行的落子前检查标准，不要使用问号。"
         u8"JSON 字段名必须保持 diagnosis、evidence、training_task、reflection_question，不要输出 Markdown。"
         u8"禁止输出 a0-i9、f5-c3 等坐标着法；所有走法必须使用中文棋谱，例如车九进一。");
 
     const QString userPrompt = QString::fromUtf8(
         u8"请根据以下结构化证据输出 JSON 教练建议：\n"
-        u8"步数：%1\n实际走法：%2（%3）\n引擎推荐：%4（%5）\n"
+        u8"步数：%1\n实际走法：%2\n引擎推荐：%3\n"
         u8"最佳评分：%6\n实际评分：%7\n局面损失：%8\n错误等级：%9\n"
-        u8"思考时间：%10 毫秒\n实战后惩罚线：%11\n推荐着应对线：%12\n走棋前局面编码：%13\n"
-        u8"长期统计：累计对局 %14，已分析红方走法 %15，平均损失 %16，严重失误 %17，"
-        u8"主动悔棋 %18 次，其中已确认明显/严重失误 %19 次。")
+        u8"思考时间：%10 毫秒\n实战后惩罚线：%11\n推荐着应对线：%12\n"
+        u8"长期统计：累计对局 %13，已分析红方走法 %14，平均损失 %15，严重失误 %16，"
+        u8"主动悔棋 %17 次，其中已确认明显/严重失误 %18 次。")
         .arg(analysis.ply)
-        .arg(analysis.actualNotation, analysis.actualMove,
-             analysis.bestNotation, analysis.bestMove)
+        .arg(analysis.actualNotation, analysis.bestNotation)
         .arg(analysis.bestScore)
         .arg(analysis.actualScore)
         .arg(analysis.scoreLoss)
@@ -620,7 +623,6 @@ QByteArray DeepSeekCoach::makeRequestBody(const Request &request)
                  ? QString::fromUtf8(u8"引擎未返回足够的实战后变化")
                  : analysis.actualPrincipalVariation)
         .arg(analysis.principalVariation)
-        .arg(analysis.boardBefore)
         .arg(stats.games)
         .arg(stats.analyzedMoves)
         .arg(stats.averageLoss, 0, 'f', 1)
@@ -628,10 +630,10 @@ QByteArray DeepSeekCoach::makeRequestBody(const Request &request)
         .arg(stats.undoEvents)
         .arg(stats.blunderUndoEvents);
     const QString contextualPrompt = userPrompt + QString::fromUtf8(
-        u8"\n\n下面是从开局到当前的完整决策轨迹。必须结合前后着法和悔棋分支判断本步，"
-        u8"不要把它当成孤立局面：\n%1")
-        .arg(request.gameContext.isEmpty() ? QString::fromUtf8(u8"暂无完整棋谱")
-                                           : request.gameContext);
+        u8"\n\n学习者在落子前留下的思路（仅作其意图线索，不能作为棋局事实）：\n%1")
+        .arg(request.gameContext.trimmed().isEmpty()
+                 ? QString::fromUtf8(u8"未记录")
+                 : request.gameContext.trimmed().left(600));
 
     QJsonObject body;
     body["model"] = QString::fromLatin1(deepSeekModel);

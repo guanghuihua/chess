@@ -628,7 +628,7 @@ void MainWindow::handleAnalysis(const PikafishAnalyzer::AnalysisResult &result)
         if (matchedUndo && result.scoreLoss > 30) {
             coach_->requestCoaching(
                 result, database_.trainingStats(active_user_id_),
-                database_.moveCoachingContext(result.gameId, result.ply));
+                QString());
         }
         return;
     }
@@ -704,23 +704,20 @@ void MainWindow::handleAnalysis(const PikafishAnalyzer::AnalysisResult &result)
             QStringLiteral("notice"), result.ply);
     }
     coach_chat_context_ = QString::fromUtf8(
-        u8"对局数据库 ID：%1\n第 %2 步，红方实际走法：%3（%4）\n"
-        u8"Pikafish 推荐：%5（%6）\n评分：%7→%8，局面损失：%9，等级：%10\n"
-        u8"实战后惩罚线：%11\n推荐着应对线：%12\n走棋前局面：%13\n学习者当时思路：%14")
-        .arg(result.gameId).arg(result.ply)
-        .arg(result.actualNotation, result.actualMove,
-             result.bestNotation, result.bestMove)
+        u8"第 %1 步，红方实际走法：%2\n"
+        u8"Pikafish 推荐：%3\n评分：%4→%5，局面损失：%6，等级：%7\n"
+        u8"实战后惩罚线：%8\n推荐着应对线：%9\n学习者当时思路：%10")
+        .arg(result.ply)
+        .arg(result.actualNotation, result.bestNotation)
         .arg(result.bestScore).arg(result.actualScore).arg(result.scoreLoss)
-        .arg(categoryText, actualLine, bestLine, result.boardBefore,
+        .arg(categoryText, actualLine, bestLine,
              learnerThought.isEmpty() ? QString::fromUtf8(u8"未记录") : learnerThought);
     pending_chat_ply_ = result.ply;
     refreshStats();
     if (result.scoreLoss > 30) {
         coach_->requestCoaching(
             result, database_.trainingStats(active_user_id_),
-            database_.moveCoachingContext(result.gameId, result.ply)
-                + QString::fromUtf8(u8"\n学习者当时思路：")
-                + (learnerThought.isEmpty() ? QString::fromUtf8(u8"未记录") : learnerThought));
+            learnerThought);
     }
 }
 
