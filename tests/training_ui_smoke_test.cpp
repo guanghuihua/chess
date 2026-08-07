@@ -1,10 +1,13 @@
 #include <QApplication>
+#include <QMouseEvent>
+#include <QPushButton>
 #include <QStandardPaths>
 #include <QTimer>
 
 #include "game_database.h"
 #include "training_dialog.h"
 #include "game_review_dialog.h"
+#include "xiangqi_board_widget.h"
 #include "xiangqi_game.h"
 
 int main(int argc, char *argv[])
@@ -37,7 +40,31 @@ int main(int argc, char *argv[])
         return 5;
     }
 
+    XiangqiGame initialPosition;
+    XiangqiBoardWidget trainingBoard(nullptr, false);
+    trainingBoard.resize(864, 964);
+    if (!trainingBoard.loadTrainingPosition(initialPosition.boardString())) {
+        return 6;
+    }
+    const auto click = [&trainingBoard](int x, int y) {
+        QMouseEvent event(QEvent::MouseButtonPress, QPointF(x, y), QPointF(x, y),
+                          Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(&trainingBoard, &event);
+    };
+    click(32, 632);
+    click(32, 532);
+    if (trainingBoard.game().moveHistory().size() != 1 || !trainingBoard.undoTrainingMove()
+        || trainingBoard.game().boardString() != initialPosition.boardString()
+        || trainingBoard.game().sideToMove() != XiangqiGame::Side::Red
+        || trainingBoard.undoTrainingMove()) {
+        return 7;
+    }
+
     TrainingDialog dialog(&database, 1);
+    auto *undoButton = dialog.findChild<QPushButton *>("trainingUndo");
+    if (!undoButton || undoButton->isEnabled()) {
+        return 8;
+    }
     QTimer::singleShot(250, &dialog, &QDialog::accept);
     dialog.exec();
     GameReviewDialog reviewDialog(&database, 1);

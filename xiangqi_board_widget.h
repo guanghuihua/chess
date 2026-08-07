@@ -40,6 +40,7 @@ public:
     void newGame();
     bool resign(XiangqiGame::Side side);
     int undoTurn();
+    bool undoTrainingMove();
     bool loadTrainingPosition(const std::string &board);
     bool loadReviewPosition(const std::string &board, XiangqiGame::Side sideToMove,
                             int fromRow = -1, int fromCol = -1,

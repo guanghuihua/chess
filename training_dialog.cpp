@@ -73,12 +73,15 @@ TrainingDialog::TrainingDialog(GameDatabase *database, qint64 userId, QWidget *p
     auto *buttonRow = new QHBoxLayout;
     generate_button_ = new QPushButton(QString::fromUtf8(u8"AI 出新题"), panel);
     hint_button_ = new QPushButton(QString::fromUtf8(u8"提示"), panel);
+    undo_button_ = new QPushButton(QString::fromUtf8(u8"悔棋"), panel);
+    undo_button_->setObjectName("trainingUndo");
     next_button_ = new QPushButton(QString::fromUtf8(u8"下一题"), panel);
     ai_button_ = new QPushButton(QString::fromUtf8(u8"AI残局讲解"), panel);
     ai_button_->setObjectName("trainingAiButton");
     next_button_->setObjectName("trainingPrimary");
     auto *closeButton = new QPushButton(QString::fromUtf8(u8"结束训练"), panel);
     buttonRow->addWidget(hint_button_);
+    buttonRow->addWidget(undo_button_);
     buttonRow->addWidget(generate_button_);
     buttonRow->addWidget(ai_button_);
     buttonRow->addWidget(next_button_);
@@ -107,6 +110,8 @@ TrainingDialog::TrainingDialog(GameDatabase *database, qint64 userId, QWidget *p
         QPushButton#trainingPrimary { color: white; background: #9b3f2f; border-color: #873426; }
         QPushButton#trainingAiButton { color: #315f54; border-color: #9bb8ac; }
         QPushButton#trainingAiButton:hover { background: #e5f0eb; }
+        QPushButton#trainingUndo { color: #8a4b22; border-color: #c9a98c; }
+        QPushButton#trainingUndo:hover { background: #f6eadf; }
         QPushButton:disabled { color: #999; background: #eeeae2; }
     )"));
 
@@ -114,6 +119,8 @@ TrainingDialog::TrainingDialog(GameDatabase *database, qint64 userId, QWidget *p
             this, &TrainingDialog::handleMove);
     connect(hint_button_, &QPushButton::clicked,
             this, &TrainingDialog::showHint);
+    connect(undo_button_, &QPushButton::clicked,
+            this, &TrainingDialog::undoCurrentMove);
     connect(generate_button_, &QPushButton::clicked,
             this, &TrainingDialog::requestGeneratedExercise);
     connect(next_button_, &QPushButton::clicked,
@@ -142,6 +149,7 @@ void TrainingDialog::loadSession()
             u8"<h3>今日训练已完成</h3><p>已经掌握的题目会按照间隔复习计划再次出现。</p>"));
         board_->setEnabled(false);
         hint_button_->setEnabled(false);
+        undo_button_->setEnabled(false);
         ai_button_->setEnabled(false);
         next_button_->setEnabled(false);
         return;
@@ -191,10 +199,14 @@ void TrainingDialog::loadCurrentPosition()
             + QString::fromUtf8(u8"\n推荐原因：") + position.recommendationReason);
     }
     result_browser_->clear();
+    pending_move_.clear();
+    pending_move_thinking_time_ms_ = 0;
     hint_button_->setEnabled(true);
+    undo_button_->setEnabled(false);
     ai_button_->setEnabled(position.theme.contains(QString::fromUtf8(u8"残局"))
                            || position.diagnosisTag == "missed_mate");
     next_button_->setEnabled(false);
+    next_button_->setText(QString::fromUtf8(u8"下一题"));
     generate_button_->setEnabled(generation_request_id_.isEmpty());
     hint_count_ = 0;
     if (!board_->loadTrainingPosition(position.board.toStdString())) {
@@ -209,16 +221,39 @@ void TrainingDialog::loadCurrentPosition()
 
 void TrainingDialog::handleMove(const QString &uciMove)
 {
-    if (current_index_ < 0 || current_index_ >= positions_.size()) {
+    if (current_index_ < 0 || current_index_ >= positions_.size() || !pending_move_.isEmpty()) {
         return;
     }
     const auto &position = positions_[current_index_];
-    const bool correct = uciMove == position.bestMove;
-    QString error;
-    if (!database_->recordTrainingAttempt(position.id, uciMove, correct,
-                                           timer_.elapsed(), hint_count_, &error)) {
-        QMessageBox::warning(this, QString::fromUtf8(u8"保存训练结果失败"), error);
+    pending_move_ = uciMove;
+    pending_move_thinking_time_ms_ = timer_.elapsed();
+    result_browser_->setHtml(QString::fromUtf8(
+        u8"<h3>已落子，尚未提交</h3><p>你的尝试是 <b>%1</b>。确认作答后，系统才会判定并写入训练记录；"
+        u8"若想重新计算，可点击“悔棋”。悔棋会撤回棋盘，但会按一次错误/不确定尝试计入个人训练统计。</p>")
+                                 .arg(displayMove(position.board, uciMove).toHtmlEscaped()));
+    hint_button_->setEnabled(false);
+    ai_button_->setEnabled(false);
+    undo_button_->setEnabled(true);
+    next_button_->setText(QString::fromUtf8(u8"确认作答"));
+    next_button_->setEnabled(true);
+}
+
+void TrainingDialog::confirmCurrentMove()
+{
+    if (pending_move_.isEmpty() || current_index_ < 0 || current_index_ >= positions_.size()) {
+        return;
     }
+    const auto &position = positions_[current_index_];
+    const QString submittedMove = pending_move_;
+    const bool correct = submittedMove == position.bestMove;
+    QString error;
+    if (!database_->recordTrainingAttempt(position.id, submittedMove, correct,
+                                           pending_move_thinking_time_ms_, hint_count_, &error)) {
+        QMessageBox::warning(this, QString::fromUtf8(u8"保存训练结果失败"), error);
+        return;
+    }
+    pending_move_.clear();
+    pending_move_thinking_time_ms_ = 0;
 
     const QString heading = correct
         ? QString::fromUtf8(u8"<h2 style='color:#26733c'>正确</h2>")
@@ -230,7 +265,7 @@ void TrainingDialog::handleMove(const QString &uciMove)
             u8"你在实战中的走法：<b>%3</b></p>"
             u8"<p><b>Pikafish 推荐变化</b><br><code>%4</code></p>"
             u8"<p style='color:#746d63'>%5</p>")
-            .arg(displayMove(position.board, uciMove).toHtmlEscaped(),
+            .arg(displayMove(position.board, submittedMove).toHtmlEscaped(),
                  displayMove(position.board, position.bestMove).toHtmlEscaped(),
                  position.actualMove.isEmpty()
                      ? QString::fromUtf8(u8"本题为画像变式，没有历史实战着")
@@ -244,8 +279,41 @@ void TrainingDialog::handleMove(const QString &uciMove)
                      : QString::fromUtf8(u8"建议比较目标着与实战走法，检查自己遗漏了什么强制手段。")));
     hint_button_->setEnabled(false);
     ai_button_->setEnabled(false);
+    undo_button_->setEnabled(false);
+    next_button_->setText(QString::fromUtf8(u8"下一题"));
     next_button_->setEnabled(true);
-    requestAutomaticCoaching(uciMove, correct);
+    requestAutomaticCoaching(submittedMove, correct);
+}
+
+void TrainingDialog::undoCurrentMove()
+{
+    if (pending_move_.isEmpty() || current_index_ < 0 || current_index_ >= positions_.size()) {
+        return;
+    }
+    const auto &position = positions_[current_index_];
+    QString error;
+    if (!database_->recordTrainingAttempt(position.id, pending_move_, false,
+                                           pending_move_thinking_time_ms_, hint_count_, &error)) {
+        QMessageBox::warning(this, QString::fromUtf8(u8"无法记录悔棋"), error);
+        return;
+    }
+    if (!board_->undoTrainingMove()) {
+        QMessageBox::warning(this, QString::fromUtf8(u8"悔棋失败"),
+                             QString::fromUtf8(u8"该尝试已记入训练记录，但棋盘未能恢复。请重新打开本题。"));
+        return;
+    }
+    pending_move_.clear();
+    pending_move_thinking_time_ms_ = 0;
+    timer_.restart();
+    hint_button_->setEnabled(hint_count_ < 3);
+    ai_button_->setEnabled(position.theme.contains(QString::fromUtf8(u8"残局"))
+                           || position.diagnosisTag == "missed_mate");
+    undo_button_->setEnabled(false);
+    next_button_->setText(QString::fromUtf8(u8"下一题"));
+    next_button_->setEnabled(false);
+    result_browser_->setHtml(QString::fromUtf8(
+        u8"<h3>已悔棋</h3><p>这一步已撤回。按照训练规则，悔棋代表这次计算尚不确定，"
+        u8"已按一次错误尝试写入个人训练统计；请重新计算后再确认作答。</p>"));
 }
 
 void TrainingDialog::requestAutomaticCoaching(const QString &uciMove, bool correct)
@@ -305,6 +373,10 @@ void TrainingDialog::showHint()
 
 void TrainingDialog::nextPosition()
 {
+    if (!pending_move_.isEmpty()) {
+        confirmCurrentMove();
+        return;
+    }
     ++current_index_;
     if (current_index_ >= positions_.size()) {
         const auto summary = database_->trainingSummary(user_id_);
@@ -318,6 +390,7 @@ void TrainingDialog::nextPosition()
         source_label_->clear();
         board_->setEnabled(false);
         hint_button_->setEnabled(false);
+        undo_button_->setEnabled(false);
         ai_button_->setEnabled(false);
         next_button_->setEnabled(false);
         return;

@@ -45,16 +45,21 @@ private:
     QPushButton *next_button_ = nullptr;
     QPushButton *ai_button_ = nullptr;
     QPushButton *generate_button_ = nullptr;
+    QPushButton *undo_button_ = nullptr;
     QVector<GameDatabase::TrainingPosition> positions_;
     int current_index_ = -1;
     int hint_count_ = 0;
     QElapsedTimer timer_;
     QString coach_request_id_;
     QString generation_request_id_;
+    QString pending_move_;
+    qint64 pending_move_thinking_time_ms_ = 0;
 
     void loadSession();
     void loadCurrentPosition();
     void handleMove(const QString &uciMove);
+    void confirmCurrentMove();
+    void undoCurrentMove();
     void showHint();
     void nextPosition();
     void requestEndgameCoaching();

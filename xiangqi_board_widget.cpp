@@ -241,6 +241,21 @@ int XiangqiBoardWidget::undoTurn()
     return undone;
 }
 
+bool XiangqiBoardWidget::undoTrainingMove()
+{
+    if (!training_mode_ || !training_locked_ || game_.moveHistory().empty()) {
+        return false;
+    }
+    selected_.reset();
+    if (!game_.undoLastMove()) {
+        return false;
+    }
+    training_locked_ = false;
+    turn_timer_.restart();
+    update();
+    return true;
+}
+
 void XiangqiBoardWidget::setDifficulty(Difficulty difficulty)
 {
     difficulty_ = difficulty;
