@@ -6,10 +6,10 @@
 class CredentialStore
 {
 public:
-    static QString readPackyApiKey(QString *errorMessage = nullptr);
-    static bool writePackyApiKey(const QString &apiKey,
-                                 QString *errorMessage = nullptr);
-    static bool removePackyApiKey(QString *errorMessage = nullptr);
+    static QString readDeepSeekApiKey(QString *errorMessage = nullptr);
+    static bool writeDeepSeekApiKey(const QString &apiKey,
+                                    QString *errorMessage = nullptr);
+    static bool removeDeepSeekApiKey(QString *errorMessage = nullptr);
 };
 
 #endif // CREDENTIAL_STORE_H

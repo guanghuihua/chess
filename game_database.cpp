@@ -860,7 +860,7 @@ QVector<GameDatabase::TrainingPosition> GameDatabase::dueTrainingPositions(qint6
         "CASE WHEN p.diagnosis_tag IN (SELECT diagnosis_tag FROM training_plan_items "
         "WHERE plan_id=(SELECT id FROM training_plans WHERE user_id=? "
         "ORDER BY through_games DESC, id DESC LIMIT 1)) THEN 0 ELSE 1 END, "
-        "p.mastery ASC, p.score_loss DESC, p.id ASC LIMIT ?");
+        "p.mastery ASC, p.score_loss DESC, p.id DESC LIMIT ?");
     query.addBindValue(userId);
     query.addBindValue(QDateTime::currentDateTime().toString(Qt::ISODateWithMs));
     query.addBindValue(userId);
@@ -868,6 +868,48 @@ QVector<GameDatabase::TrainingPosition> GameDatabase::dueTrainingPositions(qint6
     if (!query.exec()) {
         return positions;
     }
+    while (query.next()) {
+        TrainingPosition position;
+        position.id = query.value(0).toLongLong();
+        position.sourceGameId = query.value(1).toLongLong();
+        position.sourcePly = query.value(2).toLongLong();
+        position.board = query.value(3).toString();
+        position.bestMove = query.value(4).toString();
+        position.actualMove = query.value(5).toString();
+        position.scoreLoss = query.value(6).toInt();
+        position.category = query.value(7).toString();
+        position.principalVariation = query.value(8).toString();
+        position.theme = query.value(9).toString();
+        position.diagnosisTag = query.value(10).toString();
+        position.recommendationReason = query.value(11).toString();
+        position.mastery = query.value(12).toInt();
+        position.attempts = query.value(13).toInt();
+        position.correctAttempts = query.value(14).toInt();
+        positions.push_back(position);
+    }
+    return positions;
+}
+
+QVector<GameDatabase::TrainingPosition> GameDatabase::trainingLibraryPositions(
+    qint64 userId, int limit) const
+{
+    QVector<TrainingPosition> positions;
+    QSqlQuery query(database_);
+    query.prepare(
+        "SELECT p.id, p.source_game_id, p.source_ply, p.board, p.best_move, "
+        "p.actual_move, p.score_loss, p.category, p.principal_variation, p.theme, "
+        "p.diagnosis_tag, p.recommendation_reason, p.mastery, "
+        "COUNT(t.id), COALESCE(SUM(t.correct), 0) "
+        "FROM training_positions p JOIN games g ON g.id = p.source_game_id "
+        "LEFT JOIN training_attempts t ON t.training_position_id = p.id "
+        "WHERE g.user_id = ? GROUP BY p.id "
+        "ORDER BY CASE WHEN COUNT(t.id)=0 THEN 0 ELSE 1 END, "
+        "CASE WHEN p.source_ply < 0 THEN 0 WHEN p.source_ply >= 1000000 THEN 1 ELSE 2 END, "
+        "p.mastery ASC, p.id DESC LIMIT ?");
+    query.addBindValue(userId);
+    query.addBindValue(std::max(1, limit));
+    if (!query.exec()) return positions;
+
     while (query.next()) {
         TrainingPosition position;
         position.id = query.value(0).toLongLong();
@@ -918,10 +960,20 @@ QString GameDatabase::trainingGenerationContext(qint64 userId) const
                                    .arg(query.value(1).toString()));
         }
     }
+    QStringList recentThemes;
+    QSqlQuery themeQuery(database_);
+    themeQuery.prepare(
+        "SELECT theme FROM training_positions p JOIN games g ON g.id=p.source_game_id "
+        "WHERE g.user_id=? AND p.source_ply<0 ORDER BY p.id DESC LIMIT 6");
+    themeQuery.addBindValue(userId);
+    if (themeQuery.exec()) {
+        while (themeQuery.next()) recentThemes.append(themeQuery.value(0).toString());
+    }
     return QString::fromUtf8(
         u8"用户画像摘要（仅用于生成一题新的专项训练，不得复述为历史棋局）：\n"
         u8"有效对局：%1；已分析着法：%2；严重失误：%3；平均损失：%4。\n"
-        u8"当前计划重点：%5。\n能力维度：%6。\n近期证据：%7。")
+        u8"当前计划重点：%5。\n能力维度：%6。\n近期证据：%7。\n"
+        u8"最近 AI 原创题主题（必须避开重复结构）：%8。")
         .arg(stats.games)
         .arg(stats.analyzedMoves)
         .arg(stats.blunders)
@@ -931,7 +983,9 @@ QString GameDatabase::trainingGenerationContext(qint64 userId) const
         .arg(dimensions.isEmpty() ? QString::fromUtf8(u8"暂无足够维度证据")
                                   : dimensions.join(QStringLiteral("\n")))
         .arg(evidence.isEmpty() ? QString::fromUtf8(u8"暂无单步证据，题目应为基础威胁检查")
-                                : evidence.join(QStringLiteral("\n")));
+                                : evidence.join(QStringLiteral("\n")))
+        .arg(recentThemes.isEmpty() ? QString::fromUtf8(u8"暂无，优先选择基础但清晰的局面")
+                                    : recentThemes.join(QStringLiteral("；")));
 }
 
 qint64 GameDatabase::storeGeneratedTrainingPosition(
@@ -940,6 +994,16 @@ qint64 GameDatabase::storeGeneratedTrainingPosition(
     const QString &diagnosisTag, const QString &learningGoal, const QString &hint,
     QString *errorMessage)
 {
+    QSqlQuery duplicate(database_);
+    duplicate.prepare(
+        "SELECT p.id FROM training_positions p JOIN games g ON g.id=p.source_game_id "
+        "WHERE g.user_id=? AND p.source_ply<0 AND p.board=? LIMIT 1");
+    duplicate.addBindValue(userId);
+    duplicate.addBindValue(board);
+    if (duplicate.exec() && duplicate.next()) {
+        return duplicate.value(0).toLongLong();
+    }
+
     QSqlQuery source(database_);
     source.prepare("SELECT id FROM games WHERE user_id=? ORDER BY id DESC LIMIT 1");
     source.addBindValue(userId);

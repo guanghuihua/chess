@@ -62,7 +62,8 @@ int main(int argc, char *argv[])
 
     TrainingDialog dialog(&database, 1);
     auto *undoButton = dialog.findChild<QPushButton *>("trainingUndo");
-    if (!undoButton || undoButton->isEnabled()) {
+    auto *wrongLineButton = dialog.findChild<QPushButton *>("trainingWrongLine");
+    if (!undoButton || !wrongLineButton || undoButton->isEnabled() || wrongLineButton->isEnabled()) {
         return 8;
     }
     QTimer::singleShot(250, &dialog, &QDialog::accept);

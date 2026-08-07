@@ -131,7 +131,7 @@ MainWindow::MainWindow(QWidget *parent)
     engine_status_label_->setObjectName("statusPill");
     panelLayout->addWidget(engine_status_label_);
 
-    coach_status_label_ = new QLabel(QString::fromUtf8(u8"正在检查 Packy 配置……"), panel);
+    coach_status_label_ = new QLabel(QString::fromUtf8(u8"正在检查 DeepSeek 配置……"), panel);
     coach_status_label_->setWordWrap(true);
     coach_status_label_->setObjectName("statusPill");
     panelLayout->addWidget(coach_status_label_);
@@ -374,7 +374,7 @@ MainWindow::MainWindow(QWidget *parent)
     connect(user_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MainWindow::switchUser);
     connect(aiSettingsButton, &QPushButton::clicked,
-            this, &MainWindow::configurePacky);
+            this, &MainWindow::configureDeepSeek);
     connect(difficultyCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this](int index) {
                 board_widget_->setDifficulty(
@@ -563,7 +563,7 @@ void MainWindow::handleGameEnded()
     if (advice_feed_layout_) {
         const QString progress = coach_ && coach_->isConfigured()
             ? QString::fromUtf8(u8"正在等待引擎完成剩余分析，然后生成整盘 AI 建议……")
-            : QString::fromUtf8(u8"引擎分析会继续保存；配置 Packy 后可生成整盘 AI 建议。");
+            : QString::fromUtf8(u8"引擎分析会继续保存；配置 DeepSeek 后可生成整盘 AI 建议。");
         appendAdviceCard(QString::fromUtf8(u8"本局已经结束"), progress,
                          {}, {}, QStringLiteral("notice"));
     }
@@ -736,7 +736,7 @@ void MainWindow::requestPendingGameReviews()
             localReview.model = QStringLiteral("local-engine-coach");
             localReview.overview = QString::fromUtf8(
                 u8"本局共走 %1 步，红方 %2 步得到引擎分析，平均局面损失为 %3。"
-                u8"这是依据引擎数据生成的离线总结；配置 Packy 后可获得更深入的思考模式分析。")
+                u8"这是依据引擎数据生成的离线总结；配置 DeepSeek 后可获得更深入的思考模式分析。")
                 .arg(context.totalMoves).arg(context.analyzedMoves)
                 .arg(context.averageLoss, 0, 'f', 1);
             localReview.turningPoints = context.keyMoments;
@@ -878,7 +878,7 @@ void MainWindow::sendCoachQuestion()
     if (question.isEmpty()) return;
     if (!coach_ || !coach_->isConfigured()) {
         QMessageBox::information(this, QString::fromUtf8(u8"AI 教练未启用"),
-                                 QString::fromUtf8(u8"请先在“AI 设置”中配置 Packy API Key。"));
+                                 QString::fromUtf8(u8"请先在“AI 设置”中配置 DeepSeek API Key。"));
         return;
     }
     if (current_game_id_ < 0 || coach_chat_context_.trimmed().isEmpty()) {
@@ -1024,7 +1024,7 @@ void MainWindow::startPersonalTraining()
             [this, &dialog](const QString &requestId) {
         if (!coach_ || !coach_->isConfigured()) {
             dialog.generatedExerciseFailed(
-                requestId, QString::fromUtf8(u8"请先在 AI 设置中配置 Packy API Key。"));
+                requestId, QString::fromUtf8(u8"请先在 AI 设置中配置 DeepSeek API Key。"));
             return;
         }
         coach_->requestGeneratedExercise(requestId,
@@ -1069,6 +1069,44 @@ void MainWindow::startPersonalTraining()
             return;
         }
         dialog.generatedExerciseReady(analysis.requestId);
+    });
+    connect(&dialog, &TrainingDialog::wrongLineRequested, &dialog,
+            [this, &dialog](const QString &requestId, const QString &boardBefore,
+                            const QString &boardAfterWrong, const QString &wrongMove) {
+        if (!analyzer_) {
+            dialog.wrongLineAnalysisFailed(requestId, QString::fromUtf8(u8"Pikafish 未初始化。"));
+            return;
+        }
+        pending_training_lines_.insert(requestId, PendingTrainingLine{boardBefore, wrongMove});
+        QString error;
+        if (!analyzer_->analyzeTrainingPosition(requestId, boardAfterWrong,
+                                                XiangqiGame::Side::Black, &error)) {
+            pending_training_lines_.remove(requestId);
+            dialog.wrongLineAnalysisFailed(requestId, error);
+        }
+    });
+    connect(analyzer_, &PikafishAnalyzer::trainingPositionAnalyzed, &dialog,
+            [this, &dialog](const PikafishAnalyzer::PositionAnalysis &analysis,
+                            const QString &analysisError) {
+        const auto it = pending_training_lines_.find(analysis.requestId);
+        if (it == pending_training_lines_.end()) return;
+        const PendingTrainingLine line = it.value();
+        pending_training_lines_.erase(it);
+        if (!analysisError.isEmpty() || analysis.rawPrincipalVariation.isEmpty()) {
+            dialog.wrongLineAnalysisFailed(
+                analysis.requestId,
+                analysisError.isEmpty()
+                    ? QString::fromUtf8(u8"引擎没有返回可推演的惩罚线。")
+                    : analysisError);
+            return;
+        }
+        const QString variation = line.wrongMove + QStringLiteral(" ")
+            + analysis.rawPrincipalVariation;
+        EngineVariationDialog variationDialog(
+            line.boardBefore, XiangqiGame::Side::Red, variation,
+            QString::fromUtf8(u8"错误着后的引擎惩罚线"), &dialog);
+        dialog.wrongLineAnalysisFinished(analysis.requestId);
+        variationDialog.exec();
     });
     dialog.exec();
     refreshStats();
@@ -1204,10 +1242,10 @@ void MainWindow::showMilestoneReportIfNeeded()
     }
 }
 
-void MainWindow::configurePacky()
+void MainWindow::configureDeepSeek()
 {
     QDialog dialog(this);
-    dialog.setWindowTitle(QString::fromUtf8(u8"Packy API 设置"));
+    dialog.setWindowTitle(QString::fromUtf8(u8"DeepSeek API 设置"));
     dialog.setMinimumWidth(500);
 
     auto *layout = new QVBoxLayout(&dialog);
@@ -1249,12 +1287,12 @@ void MainWindow::configurePacky()
         }
         apiKeyEdit->clear();
         resultLabel->setStyleSheet("color: #555;");
-        resultLabel->setText(QString::fromUtf8(u8"已安全保存，正在连接 Packy……"));
+        resultLabel->setText(QString::fromUtf8(u8"已安全保存，正在连接 DeepSeek……"));
         coach_->testConnection();
     });
     connect(deleteButton, &QPushButton::clicked, &dialog, [this, resultLabel] {
         if (QMessageBox::question(this, QString::fromUtf8(u8"删除密钥"),
-                                  QString::fromUtf8(u8"确定删除本机保存的 Packy 密钥吗？"))
+                                  QString::fromUtf8(u8"确定删除本机保存的 DeepSeek 密钥吗？"))
             != QMessageBox::Yes) {
             return;
         }

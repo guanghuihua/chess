@@ -68,6 +68,12 @@ private:
     int pending_chat_ply_ = 0;
     QHash<int, PikafishAnalyzer::AnalysisResult> current_analyses_;
     QHash<QString, DeepSeekCoach::ExerciseDraft> pending_exercise_drafts_;
+    struct PendingTrainingLine
+    {
+        QString boardBefore;
+        QString wrongMove;
+    };
+    QHash<QString, PendingTrainingLine> pending_training_lines_;
 
     void initializeTrainingSystem();
     void handleMoveCompleted();
@@ -100,7 +106,7 @@ private:
     void switchUser(int comboIndex);
     void populateUsers();
     void showMilestoneReportIfNeeded();
-    void configurePacky();
+    void configureDeepSeek();
     void refreshStats();
     bool isCurrentMove(qint64 gameId, int ply, const QString &uciMove) const;
 };

@@ -9,7 +9,7 @@
 
 namespace {
 #ifdef Q_OS_WIN
-const wchar_t credentialTarget[] = L"GuanghuiEducationLab.XiangqiTraining.PackyApiKey";
+const wchar_t credentialTarget[] = L"GuanghuiEducationLab.XiangqiTraining.DeepSeekApiKey";
 
 QString windowsErrorMessage(DWORD errorCode)
 {
@@ -30,7 +30,7 @@ QString windowsErrorMessage(DWORD errorCode)
 #endif
 }
 
-QString CredentialStore::readPackyApiKey(QString *errorMessage)
+QString CredentialStore::readDeepSeekApiKey(QString *errorMessage)
 {
 #ifdef Q_OS_WIN
     PCREDENTIALW credential = nullptr;
@@ -57,8 +57,8 @@ QString CredentialStore::readPackyApiKey(QString *errorMessage)
 #endif
 }
 
-bool CredentialStore::writePackyApiKey(const QString &apiKey,
-                                       QString *errorMessage)
+bool CredentialStore::writeDeepSeekApiKey(const QString &apiKey,
+                                          QString *errorMessage)
 {
 #ifdef Q_OS_WIN
     QByteArray value = apiKey.trimmed().toUtf8();
@@ -81,7 +81,7 @@ bool CredentialStore::writePackyApiKey(const QString &apiKey,
     credential.CredentialBlobSize = static_cast<DWORD>(value.size());
     credential.CredentialBlob = reinterpret_cast<LPBYTE>(value.data());
     credential.Persist = CRED_PERSIST_LOCAL_MACHINE;
-    credential.UserName = const_cast<wchar_t *>(L"Packy API");
+    credential.UserName = const_cast<wchar_t *>(L"DeepSeek API");
 
     const bool written = CredWriteW(&credential, 0) != FALSE;
     if (!written && errorMessage) {
@@ -98,7 +98,7 @@ bool CredentialStore::writePackyApiKey(const QString &apiKey,
 #endif
 }
 
-bool CredentialStore::removePackyApiKey(QString *errorMessage)
+bool CredentialStore::removeDeepSeekApiKey(QString *errorMessage)
 {
 #ifdef Q_OS_WIN
     if (CredDeleteW(credentialTarget, CRED_TYPE_GENERIC, 0)) {

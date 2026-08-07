@@ -113,7 +113,6 @@ private:
     QQueue<ChatRequest> chat_requests_;
     QQueue<ExerciseRequest> exercise_requests_;
     QString api_key_;
-    bool packy_mode_ = false;
     bool busy_ = false;
 
     void processNext();

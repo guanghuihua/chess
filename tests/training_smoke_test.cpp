@@ -98,6 +98,21 @@ int main(int argc, char *argv[])
             application.exit(10);
             return;
         }
+        const qint64 duplicateGeneratedId = database.storeGeneratedTrainingPosition(
+            1, QString::fromStdString(move.boardBefore), trainingBest,
+            result.principalVariation, 42, QString::fromUtf8(u8"威胁识别"),
+            QStringLiteral("missed_threat"), QString::fromUtf8(u8"训练先检查对方直接威胁"),
+            QString::fromUtf8(u8"先列出对方将军、吃子和强制威胁"), &error);
+        if (duplicateGeneratedId != generatedId) {
+            qCritical() << "Duplicate generated position was not deduplicated";
+            application.exit(10);
+            return;
+        }
+        if (database.trainingLibraryPositions(1, 1000).isEmpty()) {
+            qCritical() << "Training library query returned no positions";
+            application.exit(10);
+            return;
+        }
         const auto positions = database.dueTrainingPositions(1, 1000);
         auto profileVariation = positions.cend();
         auto aiGenerated = positions.cend();

@@ -6,11 +6,15 @@
 #include <algorithm>
 
 #include <QFrame>
+#include <QDialogButtonBox>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QListWidget>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QTextBrowser>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QUuid>
 
@@ -70,24 +74,32 @@ TrainingDialog::TrainingDialog(GameDatabase *database, qint64 userId, QWidget *p
         u8"完成落子后，这里会显示判定、历史走法和 Pikafish 推荐变化。"));
     panelLayout->addWidget(result_browser_, 1);
 
-    auto *buttonRow = new QHBoxLayout;
+    auto *buttonGrid = new QGridLayout;
+    buttonGrid->setHorizontalSpacing(8);
+    buttonGrid->setVerticalSpacing(8);
     generate_button_ = new QPushButton(QString::fromUtf8(u8"AI 出新题"), panel);
     hint_button_ = new QPushButton(QString::fromUtf8(u8"提示"), panel);
     undo_button_ = new QPushButton(QString::fromUtf8(u8"悔棋"), panel);
     undo_button_->setObjectName("trainingUndo");
+    review_wrong_button_ = new QPushButton(QString::fromUtf8(u8"\u590d\u76d8\u9519\u7740"), panel);
+    review_wrong_button_->setObjectName("trainingWrongLine");
+    library_button_ = new QPushButton(QString::fromUtf8(u8"\u9898\u5e93"), panel);
     next_button_ = new QPushButton(QString::fromUtf8(u8"下一题"), panel);
-    ai_button_ = new QPushButton(QString::fromUtf8(u8"AI残局讲解"), panel);
+    ai_button_ = new QPushButton(QString::fromUtf8(u8"AI局面讲解"), panel);
     ai_button_->setObjectName("trainingAiButton");
     next_button_->setObjectName("trainingPrimary");
     auto *closeButton = new QPushButton(QString::fromUtf8(u8"结束训练"), panel);
-    buttonRow->addWidget(hint_button_);
-    buttonRow->addWidget(undo_button_);
-    buttonRow->addWidget(generate_button_);
-    buttonRow->addWidget(ai_button_);
-    buttonRow->addWidget(next_button_);
-    buttonRow->addStretch();
-    buttonRow->addWidget(closeButton);
-    panelLayout->addLayout(buttonRow);
+    buttonGrid->addWidget(hint_button_, 0, 0);
+    buttonGrid->addWidget(undo_button_, 0, 1);
+    buttonGrid->addWidget(review_wrong_button_, 1, 0);
+    buttonGrid->addWidget(ai_button_, 1, 1);
+    buttonGrid->addWidget(generate_button_, 2, 0);
+    buttonGrid->addWidget(library_button_, 2, 1);
+    buttonGrid->addWidget(next_button_, 3, 0);
+    buttonGrid->addWidget(closeButton, 3, 1);
+    buttonGrid->setColumnStretch(0, 1);
+    buttonGrid->setColumnStretch(1, 1);
+    panelLayout->addLayout(buttonGrid);
     root->addWidget(panel, 2);
 
     setStyleSheet(QString::fromUtf8(R"(
@@ -103,7 +115,7 @@ TrainingDialog::TrainingDialog(GameDatabase *database, qint64 userId, QWidget *p
         }
         QTextBrowser { border: 1px solid #ddd5c6; border-radius: 6px; background: white; padding: 8px; }
         QPushButton {
-            min-height: 34px; padding: 0 14px; border-radius: 6px;
+            min-height: 38px; padding: 0 10px; border-radius: 6px;
             border: 1px solid #cfc6b7; background: #fffdf8;
         }
         QPushButton:hover { background: #f0eadf; }
@@ -121,6 +133,10 @@ TrainingDialog::TrainingDialog(GameDatabase *database, qint64 userId, QWidget *p
             this, &TrainingDialog::showHint);
     connect(undo_button_, &QPushButton::clicked,
             this, &TrainingDialog::undoCurrentMove);
+    connect(review_wrong_button_, &QPushButton::clicked,
+            this, &TrainingDialog::requestWrongLineReview);
+    connect(library_button_, &QPushButton::clicked,
+            this, &TrainingDialog::openTrainingLibrary);
     connect(generate_button_, &QPushButton::clicked,
             this, &TrainingDialog::requestGeneratedExercise);
     connect(next_button_, &QPushButton::clicked,
@@ -131,6 +147,7 @@ TrainingDialog::TrainingDialog(GameDatabase *database, qint64 userId, QWidget *p
             this, &QDialog::accept);
 
     loadSession();
+    QTimer::singleShot(0, this, &TrainingDialog::requestBackgroundExercise);
 }
 
 void TrainingDialog::loadSession()
@@ -150,7 +167,9 @@ void TrainingDialog::loadSession()
         board_->setEnabled(false);
         hint_button_->setEnabled(false);
         undo_button_->setEnabled(false);
+        review_wrong_button_->setEnabled(false);
         ai_button_->setEnabled(false);
+        library_button_->setEnabled(!database_->trainingLibraryPositions(user_id_, 1).isEmpty());
         next_button_->setEnabled(false);
         return;
     }
@@ -201,10 +220,14 @@ void TrainingDialog::loadCurrentPosition()
     result_browser_->clear();
     pending_move_.clear();
     pending_move_thinking_time_ms_ = 0;
+    last_submitted_move_.clear();
+    last_submission_was_error_ = false;
+    wrong_line_request_id_.clear();
     hint_button_->setEnabled(true);
     undo_button_->setEnabled(false);
-    ai_button_->setEnabled(position.theme.contains(QString::fromUtf8(u8"残局"))
-                           || position.diagnosisTag == "missed_mate");
+    review_wrong_button_->setEnabled(false);
+    ai_button_->setEnabled(true);
+    library_button_->setEnabled(true);
     next_button_->setEnabled(false);
     next_button_->setText(QString::fromUtf8(u8"下一题"));
     generate_button_->setEnabled(generation_request_id_.isEmpty());
@@ -234,6 +257,7 @@ void TrainingDialog::handleMove(const QString &uciMove)
     hint_button_->setEnabled(false);
     ai_button_->setEnabled(false);
     undo_button_->setEnabled(true);
+    review_wrong_button_->setEnabled(false);
     next_button_->setText(QString::fromUtf8(u8"确认作答"));
     next_button_->setEnabled(true);
 }
@@ -254,6 +278,8 @@ void TrainingDialog::confirmCurrentMove()
     }
     pending_move_.clear();
     pending_move_thinking_time_ms_ = 0;
+    last_submitted_move_ = submittedMove;
+    last_submission_was_error_ = !correct;
 
     const QString heading = correct
         ? QString::fromUtf8(u8"<h2 style='color:#26733c'>正确</h2>")
@@ -278,8 +304,9 @@ void TrainingDialog::confirmCurrentMove()
                                   .arg(hint_count_))
                      : QString::fromUtf8(u8"建议比较目标着与实战走法，检查自己遗漏了什么强制手段。")));
     hint_button_->setEnabled(false);
-    ai_button_->setEnabled(false);
-    undo_button_->setEnabled(false);
+    ai_button_->setEnabled(true);
+    undo_button_->setEnabled(!correct);
+    review_wrong_button_->setEnabled(!correct);
     next_button_->setText(QString::fromUtf8(u8"下一题"));
     next_button_->setEnabled(true);
     requestAutomaticCoaching(submittedMove, correct);
@@ -287,13 +314,17 @@ void TrainingDialog::confirmCurrentMove()
 
 void TrainingDialog::undoCurrentMove()
 {
-    if (pending_move_.isEmpty() || current_index_ < 0 || current_index_ >= positions_.size()) {
+    if (current_index_ < 0 || current_index_ >= positions_.size()) {
         return;
     }
     const auto &position = positions_[current_index_];
+    if (pending_move_.isEmpty() && !last_submission_was_error_) {
+        return;
+    }
+    const bool alreadyRecorded = pending_move_.isEmpty();
     QString error;
-    if (!database_->recordTrainingAttempt(position.id, pending_move_, false,
-                                           pending_move_thinking_time_ms_, hint_count_, &error)) {
+    if (!alreadyRecorded && !database_->recordTrainingAttempt(
+            position.id, pending_move_, false, pending_move_thinking_time_ms_, hint_count_, &error)) {
         QMessageBox::warning(this, QString::fromUtf8(u8"无法记录悔棋"), error);
         return;
     }
@@ -304,16 +335,56 @@ void TrainingDialog::undoCurrentMove()
     }
     pending_move_.clear();
     pending_move_thinking_time_ms_ = 0;
+    last_submitted_move_.clear();
+    last_submission_was_error_ = false;
+    wrong_line_request_id_.clear();
     timer_.restart();
     hint_button_->setEnabled(hint_count_ < 3);
-    ai_button_->setEnabled(position.theme.contains(QString::fromUtf8(u8"残局"))
-                           || position.diagnosisTag == "missed_mate");
+    ai_button_->setEnabled(true);
     undo_button_->setEnabled(false);
+    review_wrong_button_->setEnabled(false);
     next_button_->setText(QString::fromUtf8(u8"下一题"));
     next_button_->setEnabled(false);
-    result_browser_->setHtml(QString::fromUtf8(
-        u8"<h3>已悔棋</h3><p>这一步已撤回。按照训练规则，悔棋代表这次计算尚不确定，"
-        u8"已按一次错误尝试写入个人训练统计；请重新计算后再确认作答。</p>"));
+    result_browser_->setHtml(alreadyRecorded
+        ? QString::fromUtf8(u8"<h3>已悔棋重算</h3><p>错误作答已保留为一次训练证据；"
+                              u8"棋盘已回到题目前状态，不会重复计入错误。现在可以重新计算并落子。</p>")
+        : QString::fromUtf8(u8"<h3>已悔棋</h3><p>这一步已撤回。按照训练规则，悔棋代表这次计算尚不确定，"
+                              u8"已按一次错误尝试写入个人训练统计；请重新计算后再确认作答。</p>"));
+}
+
+void TrainingDialog::requestWrongLineReview()
+{
+    if (last_submitted_move_.isEmpty() || !last_submission_was_error_
+        || !wrong_line_request_id_.isEmpty() || current_index_ < 0
+        || current_index_ >= positions_.size()) {
+        return;
+    }
+    wrong_line_request_id_ = QStringLiteral("training-wrong-line-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    review_wrong_button_->setEnabled(false);
+    result_browser_->append(QString::fromUtf8(
+        u8"<p style='color:#8a4b22'><b>Pikafish 正在计算这步错误着后的最强惩罚线……</b></p>"));
+    emit wrongLineRequested(wrong_line_request_id_, positions_.at(current_index_).board,
+                            QString::fromStdString(board_->game().boardString()),
+                            last_submitted_move_);
+}
+
+void TrainingDialog::wrongLineAnalysisFinished(const QString &requestId)
+{
+    if (requestId != wrong_line_request_id_) return;
+    wrong_line_request_id_.clear();
+    if (last_submission_was_error_) review_wrong_button_->setEnabled(true);
+}
+
+void TrainingDialog::wrongLineAnalysisFailed(const QString &requestId,
+                                             const QString &errorMessage)
+{
+    if (requestId != wrong_line_request_id_) return;
+    wrong_line_request_id_.clear();
+    if (last_submission_was_error_) review_wrong_button_->setEnabled(true);
+    result_browser_->append(QString::fromUtf8(
+        u8"<p style='color:#9b342b'>错误着推演未完成：%1</p>")
+                                .arg(errorMessage.toHtmlEscaped()));
 }
 
 void TrainingDialog::requestAutomaticCoaching(const QString &uciMove, bool correct)
@@ -391,7 +462,9 @@ void TrainingDialog::nextPosition()
         board_->setEnabled(false);
         hint_button_->setEnabled(false);
         undo_button_->setEnabled(false);
+        review_wrong_button_->setEnabled(false);
         ai_button_->setEnabled(false);
+        library_button_->setEnabled(false);
         next_button_->setEnabled(false);
         return;
     }
@@ -408,7 +481,7 @@ void TrainingDialog::requestEndgameCoaching()
     coach_request_id_ = QStringLiteral("training-")
         + QUuid::createUuid().toString(QUuid::WithoutBraces);
     const QString evidence = QString::fromUtf8(
-        u8"这是程序已经通过 XiangqiGame 合法性检查、并由 Pikafish 计算的残局/将杀训练局面。"
+        u8"这是程序已经通过 XiangqiGame 合法性检查、并由 Pikafish 计算的专项训练局面。"
         u8"请只根据给定证据讲解，不要编造未提供的着法。\n"
         u8"训练主题：%1\n局面编码：%2\nPikafish 最佳着：%3\n主变：%4\n"
         u8"用户实战着：%5\n画像标签：%6")
@@ -419,16 +492,35 @@ void TrainingDialog::requestEndgameCoaching()
                  ? QString::fromUtf8(u8"无：这是画像变式题")
                  : displayMove(position.board, position.actualMove),
              position.diagnosisTag);
-    result_browser_->setHtml(QString::fromUtf8(u8"<p>正在请求 GPT-5.6 Terra 生成残局杀法讲解……</p>"));
+    result_browser_->setHtml(QString::fromUtf8(u8"<p>正在请求 DeepSeek AI 教练生成局面讲解……</p>"));
     ai_button_->setEnabled(false);
     emit coachQuestionAsked(
         coach_request_id_, evidence, QString(),
-        QString::fromUtf8(u8"请把这个残局题讲成可执行的杀法训练：先说明双方将军、吃子和直接威胁，再给出我应计算的关键分支和成功标准。"));
+        QString::fromUtf8(u8"请把这个专项训练局面讲成可执行的训练：先说明双方最直接的将军、吃子和威胁，"
+                            u8"再给出我应计算的关键分支、推荐着法的意图和成功标准。"));
 }
 
 void TrainingDialog::requestGeneratedExercise()
 {
-    if (!generation_request_id_.isEmpty()) return;
+    if (!generation_request_id_.isEmpty() || !pending_move_.isEmpty()) return;
+    const auto library = database_->trainingLibraryPositions(user_id_, 80);
+    for (const auto &candidate : library) {
+        if (candidate.sourcePly < 0 && candidate.attempts == 0
+            && (current_index_ < 0 || candidate.id != positions_.at(current_index_).id)) {
+            positions_ = {candidate};
+            current_index_ = 0;
+            loadCurrentPosition();
+            result_browser_->setHtml(QString::fromUtf8(
+                u8"<p style='color:#26733c'>已从已验证的 AI 原创题库切换到新题；后台会继续补充下一题。</p>"));
+            requestBackgroundExercise();
+            return;
+        }
+    }
+    if (!background_generation_request_id_.isEmpty()) {
+        result_browser_->setHtml(QString::fromUtf8(
+            u8"<p>下一道 AI 原创题正在后台生成并由 Pikafish 验题；完成后会自动加入题库。</p>"));
+        return;
+    }
     generation_request_id_ = QStringLiteral("generated-training-")
         + QUuid::createUuid().toString(QUuid::WithoutBraces);
     generate_button_->setEnabled(false);
@@ -437,8 +529,23 @@ void TrainingDialog::requestGeneratedExercise()
     emit generatedExerciseRequested(generation_request_id_);
 }
 
+void TrainingDialog::requestBackgroundExercise()
+{
+    if (!generation_request_id_.isEmpty() || !background_generation_request_id_.isEmpty()) return;
+    background_generation_request_id_ = QStringLiteral("background-training-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    emit generatedExerciseRequested(background_generation_request_id_);
+}
+
 void TrainingDialog::generatedExerciseReady(const QString &requestId)
 {
+    if (requestId == background_generation_request_id_) {
+        background_generation_request_id_.clear();
+        library_button_->setEnabled(true);
+        result_browser_->append(QString::fromUtf8(
+            u8"<p style='color:#26733c'>后台已补充 1 道通过 Pikafish 验证的 AI 原创题。</p>"));
+        return;
+    }
     if (requestId != generation_request_id_) return;
     generation_request_id_.clear();
     generate_button_->setEnabled(true);
@@ -450,6 +557,10 @@ void TrainingDialog::generatedExerciseReady(const QString &requestId)
 void TrainingDialog::generatedExerciseFailed(const QString &requestId,
                                              const QString &errorMessage)
 {
+    if (requestId == background_generation_request_id_) {
+        background_generation_request_id_.clear();
+        return;
+    }
     if (requestId != generation_request_id_) return;
     generation_request_id_.clear();
     generate_button_->setEnabled(true);
@@ -457,6 +568,44 @@ void TrainingDialog::generatedExerciseFailed(const QString &requestId,
         u8"<p style='color:#9b342b'>本次 AI 候选题没有通过验证：%1</p>"
         u8"<p>没有将它保存到题库。可以再次生成另一题。</p>")
                                  .arg(errorMessage.toHtmlEscaped()));
+}
+
+void TrainingDialog::openTrainingLibrary()
+{
+    const auto library = database_->trainingLibraryPositions(user_id_, 200);
+    QDialog dialog(this);
+    dialog.setWindowTitle(QString::fromUtf8(u8"专项训练题库"));
+    dialog.resize(660, 500);
+    auto *layout = new QVBoxLayout(&dialog);
+    auto *list = new QListWidget(&dialog);
+    for (const auto &position : library) {
+        const QString source = position.sourcePly < 0 ? QString::fromUtf8(u8"AI 原创")
+            : (position.sourcePly >= 1000000 ? QString::fromUtf8(u8"画像变式")
+                                              : QString::fromUtf8(u8"历史错题"));
+        auto *item = new QListWidgetItem(
+            QString::fromUtf8(u8"[%1] %2  | 练习 %3 次，正确 %4 次，掌握 %5/5")
+                .arg(source, position.theme).arg(position.attempts)
+                .arg(position.correctAttempts).arg(position.mastery), list);
+        item->setData(Qt::UserRole, position.id);
+    }
+    layout->addWidget(list);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Open | QDialogButtonBox::Cancel,
+                                          &dialog);
+    layout->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    connect(list, &QListWidget::itemDoubleClicked, &dialog, &QDialog::accept);
+    if (library.isEmpty() || dialog.exec() != QDialog::Accepted || !list->currentItem()) return;
+    const qint64 selectedId = list->currentItem()->data(Qt::UserRole).toLongLong();
+    for (const auto &position : library) {
+        if (position.id == selectedId) {
+            positions_ = {position};
+            current_index_ = 0;
+            loadCurrentPosition();
+            requestBackgroundExercise();
+            return;
+        }
+    }
 }
 
 void TrainingDialog::receiveCoachReply(const QString &requestId,
@@ -474,13 +623,11 @@ void TrainingDialog::receiveCoachReply(const QString &requestId,
         result_browser_->append(QString::fromUtf8(
             isAutomaticFeedback
                 ? u8"<h3>AI 教练作答复盘</h3><p>%1</p>"
-                : u8"<h3>GPT-5.6 Terra 残局杀法训练</h3><p>%1</p>")
+                : u8"<h3>DeepSeek AI 局面讲解</h3><p>%1</p>")
                                      .arg(answer.toHtmlEscaped().replace("\n", "<br>")));
     }
     if (current_index_ >= 0 && current_index_ < positions_.size()) {
-        const auto &position = positions_.at(current_index_);
-        ai_button_->setEnabled(position.theme.contains(QString::fromUtf8(u8"残局"))
-                               || position.diagnosisTag == "missed_mate");
+        ai_button_->setEnabled(true);
     }
 }
 

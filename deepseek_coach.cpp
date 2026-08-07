@@ -6,9 +6,6 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QCoreApplication>
-#include <QDir>
-#include <QFile>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QProcessEnvironment>
@@ -16,54 +13,28 @@
 #include <QUrl>
 
 namespace {
-const char packyEndpoint[] = "https://www.packyapi.ai/v1/responses";
-const char packyFastModel[] = "gpt-5.6-terra";
-const char packyReviewModel[] = "gpt-5.6-sol";
+const char deepSeekEndpoint[] = "https://api.deepseek.com/chat/completions";
+const char deepSeekModel[] = "deepseek-chat";
 }
 
 DeepSeekCoach::DeepSeekCoach(QObject *parent)
     : QObject(parent)
 {
-    QString packyKey = QProcessEnvironment::systemEnvironment().value("PACKY_API_KEY");
-    if (packyKey.isEmpty()) {
-        packyKey = QProcessEnvironment::systemEnvironment().value("APIKEY");
-    }
-    if (packyKey.isEmpty()) {
-        const QStringList candidates = {
-            QDir::current().filePath("APIKEY"),
-            QDir(QCoreApplication::applicationDirPath()).filePath("APIKEY")
-        };
-        for (const QString &path : candidates) {
-            QFile file(path);
-            if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) continue;
-            QString value = QString::fromUtf8(file.readAll()).trimmed();
-            const int equals = value.indexOf('=');
-            if (equals > 0) value = value.mid(equals + 1).trimmed();
-            if ((value.startsWith('"') && value.endsWith('"'))
-                || (value.startsWith('\'') && value.endsWith('\''))) {
-                value = value.mid(1, value.size() - 2);
-            }
-            if (!value.isEmpty()) {
-                packyKey = value;
-                break;
-            }
-        }
-    }
-    if (!packyKey.isEmpty()) {
-        api_key_ = packyKey;
-        packy_mode_ = true;
+    const QString environmentKey = QProcessEnvironment::systemEnvironment()
+                                       .value("DEEPSEEK_API_KEY").trimmed();
+    if (!environmentKey.isEmpty()) {
+        api_key_ = environmentKey;
     }
     if (api_key_.isEmpty()) {
-        api_key_ = CredentialStore::readPackyApiKey();
-        packy_mode_ = !api_key_.isEmpty();
+        api_key_ = CredentialStore::readDeepSeekApiKey();
     }
     QTimer::singleShot(0, this, [this] {
         if (api_key_.isEmpty()) {
             emit statusChanged(QString::fromUtf8(
-                u8"AI 未启用：请配置 Packy API Key，或提供 PACKY_API_KEY/APIKEY"), false);
+                u8"AI 未启用：请配置 DeepSeek API Key，或提供 DEEPSEEK_API_KEY"), false);
         } else {
             emit statusChanged(QString::fromUtf8(
-                u8"Packy 已启用 · Terra 用于即时讲解，Sol 用于整盘复盘"), true);
+                u8"DeepSeek 已启用 · 用于讲解、复盘与训练出题"), true);
         }
     });
 }
@@ -76,36 +47,34 @@ bool DeepSeekCoach::isConfigured() const
 bool DeepSeekCoach::saveApiKey(const QString &apiKey, QString *errorMessage)
 {
     const QString normalized = apiKey.trimmed();
-    if (!CredentialStore::writePackyApiKey(normalized, errorMessage)) {
+    if (!CredentialStore::writeDeepSeekApiKey(normalized, errorMessage)) {
         return false;
     }
     api_key_ = normalized;
-    packy_mode_ = true;
-    emit statusChanged(QString::fromUtf8(u8"Packy 密钥已安全保存，正在测试连接……"), true);
+    emit statusChanged(QString::fromUtf8(u8"DeepSeek 密钥已安全保存，正在测试连接……"), true);
     return true;
 }
 
 bool DeepSeekCoach::removeApiKey(QString *errorMessage)
 {
-    if (!CredentialStore::removePackyApiKey(errorMessage)) {
+    if (!CredentialStore::removeDeepSeekApiKey(errorMessage)) {
         return false;
     }
     api_key_.clear();
-    packy_mode_ = false;
-    emit statusChanged(QString::fromUtf8(u8"Packy 密钥已删除"), false);
+    emit statusChanged(QString::fromUtf8(u8"DeepSeek 密钥已删除"), false);
     return true;
 }
 
 void DeepSeekCoach::testConnection()
 {
     if (api_key_.isEmpty()) {
-        const QString message = QString::fromUtf8(u8"尚未配置 Packy API Key");
+        const QString message = QString::fromUtf8(u8"尚未配置 DeepSeek API Key");
         emit statusChanged(message, false);
         emit connectionTested(false, message);
         return;
     }
 
-    const QUrl modelsUrl(QStringLiteral("https://www.packyapi.ai/v1/models"));
+    const QUrl modelsUrl(QStringLiteral("https://api.deepseek.com/models"));
     QNetworkRequest request(modelsUrl);
     request.setRawHeader("Authorization", "Bearer " + api_key_.toUtf8());
     request.setTransferTimeout(20000);
@@ -120,21 +89,17 @@ void DeepSeekCoach::testConnection()
         if (networkOk) {
             const QJsonArray models = QJsonDocument::fromJson(body)
                                           .object().value("data").toArray();
-            bool fastFound = false;
-            bool reasoningFound = false;
             for (const QJsonValue &value : models) {
                 const QString id = value.toObject().value("id").toString();
-                fastFound = fastFound || id == activeFastModel();
-                reasoningFound = reasoningFound || id == activeReviewModel();
+                modelFound = modelFound || id == activeFastModel();
             }
-            modelFound = fastFound && reasoningFound;
         }
 
         const bool success = networkOk && modelFound;
         const QString message = success
-            ? QString::fromUtf8(u8"连接成功：GPT-5.6 Terra 与 Sol 可用")
+            ? QString::fromUtf8(u8"连接成功：DeepSeek Chat 可用")
             : (networkOk
-                    ? QString::fromUtf8(u8"连接成功，但账号暂时不可用 GPT-5.6 Terra")
+                    ? QString::fromUtf8(u8"连接成功，但账号暂时不可用 DeepSeek Chat")
                    : QString::fromUtf8(u8"连接失败：") + networkError);
         emit statusChanged(message, success);
         emit connectionTested(success, message);
@@ -171,7 +136,7 @@ void DeepSeekCoach::requestChat(const QString &requestId,
 {
     if (api_key_.isEmpty() || requestId.isEmpty() || question.trimmed().isEmpty()) {
         emit chatReplyReady(requestId, QString(),
-                            QString::fromUtf8(u8"Packy 尚未配置或问题为空"));
+                            QString::fromUtf8(u8"DeepSeek 尚未配置或问题为空"));
         return;
     }
     chat_requests_.enqueue(ChatRequest{requestId, evidenceContext,
@@ -185,7 +150,7 @@ void DeepSeekCoach::requestGeneratedExercise(const QString &requestId,
     if (api_key_.isEmpty() || requestId.isEmpty() || profileContext.trimmed().isEmpty()) {
         ExerciseDraft draft;
         draft.requestId = requestId;
-        emit exerciseDraftReady(draft, QString::fromUtf8(u8"Packy 尚未配置，或用户画像证据不足。"));
+        emit exerciseDraftReady(draft, QString::fromUtf8(u8"DeepSeek 尚未配置，或用户画像证据不足。"));
         return;
     }
     exercise_requests_.enqueue(ExerciseRequest{requestId, profileContext.left(10000)});
@@ -493,11 +458,10 @@ QByteArray DeepSeekCoach::makeChatRequestBody(const ChatRequest &request)
         .arg(request.evidenceContext.left(12000),
              request.conversationHistory.right(6000), request.question);
     QJsonObject body;
-    body["model"] = QString::fromLatin1(packyFastModel);
+    body["model"] = QString::fromLatin1(deepSeekModel);
     body["stream"] = false;
     body["max_tokens"] = 520;
     body["temperature"] = 0.2;
-    body["thinking"] = QJsonObject{{"type", "disabled"}};
     body["messages"] = QJsonArray{
         QJsonObject{{"role", "system"}, {"content", systemPrompt}},
         QJsonObject{{"role", "user"}, {"content", userPrompt}}
@@ -516,11 +480,10 @@ QByteArray DeepSeekCoach::makeExerciseRequestBody(const ExerciseRequest &request
         u8"theme、learning_goal、hint 均使用简洁中文，hint 只能给思考方向而不能泄露着法。"
         u8"局面将由规则程序和 Pikafish 独立验证；不确定合法性时宁可选择简单、素材少、局面清晰的局面。");
     QJsonObject body;
-    body["model"] = QString::fromLatin1(packyFastModel);
+    body["model"] = QString::fromLatin1(deepSeekModel);
     body["stream"] = false;
     body["max_tokens"] = 650;
     body["temperature"] = 0.65;
-    body["thinking"] = QJsonObject{{"type", "disabled"}};
     body["response_format"] = QJsonObject{{"type", "json_object"}};
     body["messages"] = QJsonArray{
         QJsonObject{{"role", "system"}, {"content", systemPrompt}},
@@ -531,48 +494,26 @@ QByteArray DeepSeekCoach::makeExerciseRequestBody(const ExerciseRequest &request
 
 QString DeepSeekCoach::activeFastModel() const
 {
-    return QString::fromLatin1(packyFastModel);
+    return QString::fromLatin1(deepSeekModel);
 }
 
 QString DeepSeekCoach::activeReviewModel() const
 {
-    return QString::fromLatin1(packyReviewModel);
+    return QString::fromLatin1(deepSeekModel);
 }
 
 QUrl DeepSeekCoach::activeEndpoint() const
 {
-    return QUrl(QString::fromLatin1(packyEndpoint));
+    return QUrl(QString::fromLatin1(deepSeekEndpoint));
 }
 
 QByteArray DeepSeekCoach::providerRequestBody(
     const QByteArray &chatCompletionsBody, bool wholeGame) const
 {
-    const QJsonObject chat = QJsonDocument::fromJson(chatCompletionsBody).object();
-    QString instructions;
-    QJsonArray input;
-    for (const QJsonValue &value : chat.value("messages").toArray()) {
-        const QJsonObject message = value.toObject();
-        const QString role = message.value("role").toString();
-        const QString content = message.value("content").toString();
-        if (role == "system") {
-            instructions += content + '\n';
-        } else {
-            input.push_back(QJsonObject{
-                {"role", role},
-                {"content", QJsonArray{QJsonObject{{"type", "input_text"},
-                                                    {"text", content}}}}
-            });
-        }
-    }
-    QJsonObject body;
+    QJsonObject body = QJsonDocument::fromJson(chatCompletionsBody).object();
     body["model"] = wholeGame ? activeReviewModel() : activeFastModel();
-    body["instructions"] = instructions.trimmed();
-    body["input"] = input;
-    body["stream"] = true;
-    body["store"] = false;
-    body["max_output_tokens"] = wholeGame ? 1800 : 1100;
-    body["reasoning"] = QJsonObject{{"effort", "high"}};
-    body["text"] = QJsonObject{{"verbosity", "low"}};
+    body["stream"] = false;
+    body.remove("thinking");
     return QJsonDocument(body).toJson(QJsonDocument::Compact);
 }
 
@@ -689,11 +630,10 @@ QByteArray DeepSeekCoach::makeRequestBody(const Request &request)
                                            : request.gameContext);
 
     QJsonObject body;
-    body["model"] = QString::fromLatin1(packyFastModel);
+    body["model"] = QString::fromLatin1(deepSeekModel);
     body["stream"] = false;
     body["max_tokens"] = 420;
     body["temperature"] = 0.15;
-    body["thinking"] = QJsonObject{{"type", "disabled"}};
     body["response_format"] = QJsonObject{{"type", "json_object"}};
     body["messages"] = QJsonArray{
         QJsonObject{{"role", "system"}, {"content", systemPrompt}},
@@ -747,11 +687,10 @@ QByteArray DeepSeekCoach::makeGameReviewRequestBody(
         .arg(stats.undoEvents).arg(stats.blunderUndoEvents);
 
     QJsonObject body;
-    body["model"] = QString::fromLatin1(packyReviewModel);
+    body["model"] = QString::fromLatin1(deepSeekModel);
     body["stream"] = false;
     body["max_tokens"] = 1300;
     body["temperature"] = request.attempt == 0 ? 0.15 : 0.0;
-    body["thinking"] = QJsonObject{{"type", "disabled"}};
     body["response_format"] = QJsonObject{{"type", "json_object"}};
     body["messages"] = QJsonArray{
         QJsonObject{{"role", "system"}, {"content", systemPrompt}},
@@ -815,7 +754,7 @@ bool DeepSeekCoach::parseCoachingContent(const QByteArray &body,
     result->gameId = request.analysis.gameId;
     result->ply = request.analysis.ply;
     result->actualMove = request.analysis.actualMove;
-    result->model = QString::fromLatin1(packyFastModel);
+    result->model = QString::fromLatin1(deepSeekModel);
     result->diagnosis = diagnosis;
     result->evidence = evidence;
     result->trainingTask = trainingTask;
@@ -875,7 +814,7 @@ bool DeepSeekCoach::parseGameReviewContent(
 
     result->gameId = request.context.gameId;
     result->userId = request.context.userId;
-    result->model = QString::fromLatin1(packyReviewModel);
+    result->model = QString::fromLatin1(deepSeekModel);
     result->overview = overview;
     result->turningPoints = turningPoints;
     result->strengths = strengths;
