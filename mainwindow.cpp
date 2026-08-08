@@ -5,6 +5,7 @@
 #include "training_dialog.h"
 #include "profile_dashboard_widget.h"
 #include "game_review_dialog.h"
+#include "chess_score_importer.h"
 #include "engine_variation_dialog.h"
 
 #include <algorithm>
@@ -12,6 +13,7 @@
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QFileDialog>
 #include <QFrame>
 #include <QFormLayout>
 #include <QHBoxLayout>
@@ -19,6 +21,7 @@
 #include <QLabel>
 #include <QMessageBox>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -92,6 +95,10 @@ MainWindow::MainWindow(QWidget *parent)
     trainingButton->setProperty("secondary", true);
     auto *reviewButton = new QPushButton(QString::fromUtf8(u8"对局复盘"), header);
     reviewButton->setProperty("secondary", true);
+    auto *favoriteButton = new QPushButton(QString::fromUtf8(u8"收藏棋谱"), header);
+    favoriteButton->setProperty("secondary", true);
+    auto *favoritesButton = new QPushButton(QString::fromUtf8(u8"收藏夹"), header);
+    favoritesButton->setProperty("secondary", true);
     auto *aiSettingsButton = new QPushButton(QString::fromUtf8(u8"AI 设置"), header);
     aiSettingsButton->setProperty("secondary", true);
     auto *newGameButton = new QPushButton(QString::fromUtf8(u8"新对局"), header);
@@ -100,6 +107,8 @@ MainWindow::MainWindow(QWidget *parent)
     headerLayout->addWidget(resignButton);
     headerLayout->addWidget(trainingButton);
     headerLayout->addWidget(reviewButton);
+    headerLayout->addWidget(favoriteButton);
+    headerLayout->addWidget(favoritesButton);
     headerLayout->addWidget(aiSettingsButton);
     headerLayout->addWidget(newGameButton);
     rootLayout->addWidget(header);
@@ -373,6 +382,10 @@ MainWindow::MainWindow(QWidget *parent)
             this, &MainWindow::startPersonalTraining);
     connect(reviewButton, &QPushButton::clicked,
             this, &MainWindow::openGameReview);
+    connect(favoriteButton, &QPushButton::clicked,
+            this, &MainWindow::favoriteScore);
+    connect(favoritesButton, &QPushButton::clicked,
+            this, &MainWindow::openFavoriteScores);
     connect(createUserButton, &QPushButton::clicked,
             this, &MainWindow::createUser);
     connect(user_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
@@ -1195,6 +1208,91 @@ void MainWindow::openGameReview()
     }
     refreshStats();
     showMilestoneReportIfNeeded();
+}
+
+void MainWindow::favoriteScore()
+{
+    const QString path = QFileDialog::getOpenFileName(
+        this, QString::fromUtf8(u8"收藏棋谱"), QString(),
+        QString::fromUtf8(u8"棋谱文件 (*.txt *.gif);;所有文件 (*.*)"));
+    if (path.isEmpty()) return;
+
+    ChessScoreImporter::ParsedScore parsed;
+    QString error;
+    if (!ChessScoreImporter::parseFile(path, &parsed, &error)) {
+        QMessageBox::warning(this, QString::fromUtf8(u8"棋谱无法收藏"), error);
+        return;
+    }
+    GameDatabase::FavoriteScore favorite;
+    favorite.userId = active_user_id_;
+    favorite.title = parsed.title;
+    favorite.sourceFile = parsed.sourceFile;
+    favorite.sourceFormat = parsed.sourceFormat;
+    favorite.initialBoard = parsed.initialBoard;
+    favorite.sideToMove = parsed.sideToMove;
+    favorite.moves = parsed.moves.join(QLatin1Char(' '));
+    favorite.rawContent = parsed.rawContent;
+    const qint64 id = database_.saveFavoriteScore(favorite, &error);
+    if (id < 0) {
+        QMessageBox::warning(this, QString::fromUtf8(u8"棋谱收藏失败"), error);
+        return;
+    }
+
+    const QString detail = parsed.warning.isEmpty()
+        ? QString::fromUtf8(u8"已保存为可复盘棋谱，着法数：") + QString::number(parsed.moves.size())
+        : parsed.warning;
+    engine_status_label_->setText(QString::fromUtf8(u8"棋谱已收藏：") + parsed.title + QStringLiteral(" · ") + detail);
+    if (parsed.initialBoard.isEmpty() || parsed.moves.isEmpty()) {
+        QMessageBox::information(this, QString::fromUtf8(u8"棋谱已收藏"), detail);
+        return;
+    }
+
+    EngineVariationDialog dialog(
+        parsed.initialBoard,
+        parsed.sideToMove.compare(QStringLiteral("b"), Qt::CaseInsensitive) == 0
+            ? XiangqiGame::Side::Black : XiangqiGame::Side::Red,
+        parsed.moves.join(QLatin1Char(' ')),
+        QString::fromUtf8(u8"已收藏棋谱 · ") + parsed.title, this);
+    dialog.exec();
+}
+
+void MainWindow::openFavoriteScores()
+{
+    const QVector<GameDatabase::FavoriteScore> scores = database_.favoriteScores(active_user_id_);
+    QDialog dialog(this);
+    dialog.setWindowTitle(QString::fromUtf8(u8"收藏夹"));
+    dialog.resize(620, 420);
+    auto *layout = new QVBoxLayout(&dialog);
+    auto *list = new QListWidget(&dialog);
+    for (const auto &score : scores) {
+        const QString moves = score.moves.isEmpty()
+            ? QString::fromUtf8(u8"仅局面")
+            : QString::fromUtf8(u8"着法 ") + QString::number(score.moves.split(' ', Qt::SkipEmptyParts).size()) + QString::fromUtf8(u8" 步");
+        auto *item = new QListWidgetItem(
+            score.title + QStringLiteral(" · ") + score.sourceFormat + QStringLiteral(" · ") + moves, list);
+        item->setData(Qt::UserRole, score.id);
+    }
+    layout->addWidget(list, 1);
+    auto *closeButton = new QPushButton(QString::fromUtf8(u8"关闭"), &dialog);
+    layout->addWidget(closeButton, 0, Qt::AlignRight);
+    connect(closeButton, &QPushButton::clicked, &dialog, &QDialog::accept);
+    connect(list, &QListWidget::itemDoubleClicked, &dialog,
+            [this, &dialog, scores](QListWidgetItem *item) {
+        const qint64 id = item->data(Qt::UserRole).toLongLong();
+        for (const auto &score : scores) {
+            if (score.id != id || score.initialBoard.isEmpty() || score.moves.isEmpty()) continue;
+            EngineVariationDialog variation(
+                score.initialBoard,
+                score.sideToMove.compare(QStringLiteral("b"), Qt::CaseInsensitive) == 0
+                    ? XiangqiGame::Side::Black : XiangqiGame::Side::Red,
+                score.moves, score.title, &dialog);
+            variation.exec();
+            return;
+        }
+        QMessageBox::information(&dialog, QString::fromUtf8(u8"无法复盘"),
+                                 QString::fromUtf8(u8"这个收藏只保存了局面或原始文件，没有完整着法。"));
+    });
+    dialog.exec();
 }
 
 void MainWindow::populateUsers()

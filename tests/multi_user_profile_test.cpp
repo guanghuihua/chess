@@ -247,6 +247,23 @@ int main(int argc, char *argv[])
         || !database.dueTrainingPositions(bob, 20).isEmpty()) {
         return 19;
     }
+    GameDatabase::FavoriteScore favorite;
+    favorite.userId = alice;
+    favorite.title = QStringLiteral("测试收藏");
+    favorite.sourceFile = QStringLiteral("sample.txt");
+    favorite.sourceFormat = QStringLiteral("UCI");
+    favorite.initialBoard = QStringLiteral("rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR");
+    favorite.sideToMove = QStringLiteral("w");
+    favorite.moves = QStringLiteral("a3a4");
+    favorite.rawContent = QStringLiteral("original score");
+    const qint64 favoriteId = database.saveFavoriteScore(favorite, &error);
+    const auto aliceFavorites = database.favoriteScores(alice);
+    if (favoriteId < 0 || aliceFavorites.size() != 1
+        || aliceFavorites.front().id != favoriteId
+        || aliceFavorites.front().moves != favorite.moves
+        || !database.favoriteScores(bob).isEmpty()) {
+        return 21;
+    }
     const auto bobAfterDelete = database.completedGames(bob, 20);
     for (int index = 0; index < bobAfterDelete.size(); ++index) {
         if (bobAfterDelete[index].sequenceNumber != bobAfterDelete.size() - index) return 20;

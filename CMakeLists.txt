@@ -39,6 +39,8 @@ set(PROJECT_SOURCES
         profile_dashboard_widget.h
         game_review_dialog.cpp
         game_review_dialog.h
+        chess_score_importer.cpp
+        chess_score_importer.h
         engine_variation_dialog.cpp
         engine_variation_dialog.h
         review_branch_dialog.cpp
@@ -209,3 +211,14 @@ if(WIN32)
 endif()
 target_include_directories(coach_request_payload_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME coach_request_payload_test COMMAND coach_request_payload_test)
+
+add_executable(chess_score_importer_test
+    tests/chess_score_importer_test.cpp
+    chess_score_importer.cpp
+    chess_score_importer.h
+    xiangqi_game.cpp
+    xiangqi_game.h
+)
+target_link_libraries(chess_score_importer_test PRIVATE Qt${QT_VERSION_MAJOR}::Core)
+target_include_directories(chess_score_importer_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME chess_score_importer_test COMMAND chess_score_importer_test)

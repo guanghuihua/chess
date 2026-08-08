@@ -237,6 +237,20 @@ public:
         QString createdAt;
     };
 
+    struct FavoriteScore
+    {
+        qint64 id = -1;
+        qint64 userId = -1;
+        QString title;
+        QString sourceFile;
+        QString sourceFormat;
+        QString initialBoard;
+        QString sideToMove;
+        QString moves;
+        QString rawContent;
+        QString createdAt;
+    };
+
     GameDatabase();
     ~GameDatabase();
 
@@ -339,6 +353,9 @@ public:
                                       int ply = -1) const;
     bool deleteCompletedGame(qint64 userId, qint64 gameId,
                              QString *errorMessage = nullptr);
+    qint64 saveFavoriteScore(const FavoriteScore &score,
+                             QString *errorMessage = nullptr);
+    QVector<FavoriteScore> favoriteScores(qint64 userId) const;
     bool rebuildPersonalization(qint64 userId, QString *errorMessage = nullptr);
     QVector<ProfileDimension> profileDimensions(qint64 userId) const;
     TrainingPlan currentTrainingPlan(qint64 userId) const;

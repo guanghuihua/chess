@@ -109,6 +109,8 @@ private:
     void populateUsers();
     void showMilestoneReportIfNeeded();
     void configureDeepSeek();
+    void favoriteScore();
+    void openFavoriteScores();
     void refreshStats();
     bool isCurrentMove(qint64 gameId, int ply, const QString &uciMove) const;
 };

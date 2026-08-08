@@ -88,6 +88,14 @@ bool GameDatabase::executeSchema(QString *errorMessage)
         "id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, "
         "created_at TEXT NOT NULL)",
 
+        "CREATE TABLE IF NOT EXISTS favorite_scores ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, "
+        "title TEXT NOT NULL, source_file TEXT NOT NULL, source_format TEXT NOT NULL, "
+        "initial_board TEXT, side_to_move TEXT, moves TEXT NOT NULL, raw_content TEXT NOT NULL, "
+        "created_at TEXT NOT NULL, FOREIGN KEY(user_id) REFERENCES users(id))",
+
+        "CREATE INDEX IF NOT EXISTS idx_favorite_scores_user ON favorite_scores(user_id, created_at)",
+
         "INSERT OR IGNORE INTO users(id, name, created_at) "
         "VALUES(1, '默认用户', datetime('now', 'localtime'))",
 
@@ -2380,6 +2388,58 @@ GameDatabase::TrainingPlan GameDatabase::currentTrainingPlan(qint64 userId) cons
 QString GameDatabase::databasePath() const
 {
     return database_path_;
+}
+
+qint64 GameDatabase::saveFavoriteScore(const FavoriteScore &score,
+                                       QString *errorMessage)
+{
+    QSqlQuery query(database_);
+    query.prepare(
+        "INSERT INTO favorite_scores(user_id,title,source_file,source_format,"
+        "initial_board,side_to_move,moves,raw_content,created_at) "
+        "VALUES(?,?,?,?,?,?,?,?,?)");
+    query.addBindValue(score.userId);
+    query.addBindValue(score.title);
+    query.addBindValue(score.sourceFile);
+    query.addBindValue(score.sourceFormat);
+    query.addBindValue(score.initialBoard);
+    query.addBindValue(score.sideToMove);
+    query.addBindValue(score.moves);
+    query.addBindValue(score.rawContent);
+    query.addBindValue(score.createdAt.isEmpty()
+                           ? QDateTime::currentDateTime().toString(Qt::ISODateWithMs)
+                           : score.createdAt);
+    if (!query.exec()) {
+        if (errorMessage) *errorMessage = query.lastError().text();
+        return -1;
+    }
+    return query.lastInsertId().toLongLong();
+}
+
+QVector<GameDatabase::FavoriteScore> GameDatabase::favoriteScores(qint64 userId) const
+{
+    QVector<FavoriteScore> result;
+    QSqlQuery query(database_);
+    query.prepare(
+        "SELECT id,user_id,title,source_file,source_format,initial_board,side_to_move,"
+        "moves,raw_content,created_at FROM favorite_scores WHERE user_id=? ORDER BY id DESC");
+    query.addBindValue(userId);
+    if (!query.exec()) return result;
+    while (query.next()) {
+        FavoriteScore score;
+        score.id = query.value(0).toLongLong();
+        score.userId = query.value(1).toLongLong();
+        score.title = query.value(2).toString();
+        score.sourceFile = query.value(3).toString();
+        score.sourceFormat = query.value(4).toString();
+        score.initialBoard = query.value(5).toString();
+        score.sideToMove = query.value(6).toString();
+        score.moves = query.value(7).toString();
+        score.rawContent = query.value(8).toString();
+        score.createdAt = query.value(9).toString();
+        result.push_back(score);
+    }
+    return result;
 }
 
 QString GameDatabase::sideName(XiangqiGame::Side side)
